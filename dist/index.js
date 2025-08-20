@@ -12117,6 +12117,7 @@ const memu_endpoint_1 = __webpack_require__(/*! ./memu-endpoint */ "./src/memu-e
  */
 async function init(router) {
     (0, memu_endpoint_1.registerGetTaskStatus)(router);
+    (0, memu_endpoint_1.registerGetTaskSummaryReady)(router);
     (0, memu_endpoint_1.registerRetrieveDefaultCategories)(router);
     (0, memu_endpoint_1.registerMemorizeConversation)(router);
     console.log(chalk_1.default.green(consts_1.MODULE_NAME), 'Plugin initialized');
@@ -12152,6 +12153,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.registerGetTaskStatus = registerGetTaskStatus;
+exports.registerGetTaskSummaryReady = registerGetTaskSummaryReady;
 exports.registerRetrieveDefaultCategories = registerRetrieveDefaultCategories;
 exports.registerMemorizeConversation = registerMemorizeConversation;
 const body_parser_1 = __importDefault(__webpack_require__(/*! body-parser */ "../../node_modules/body-parser/index.js"));
@@ -12177,6 +12179,29 @@ function registerGetTaskStatus(router) {
             console.error(chalk_1.default.red(consts_1.MODULE_NAME), 'Failed to get task status', error.message);
             return res.status(500).json({
                 error: 'Failed to get task status',
+                message: error.message,
+            });
+        }
+    });
+}
+function registerGetTaskSummaryReady(router) {
+    router.post('/getTaskSummaryReady', jsonParser, async (req, res) => {
+        try {
+            const { apiKey, timeout, taskId } = req.body;
+            if (!apiKey || !taskId) {
+                return res.status(400).json({
+                    error: 'Invalid request',
+                    message: 'apiKey and taskId are required',
+                });
+            }
+            const client = createMemuClient(apiKey, timeout);
+            const summaryReady = await client.getTaskSummaryReady(taskId);
+            return res.json(summaryReady);
+        }
+        catch (error) {
+            console.error(chalk_1.default.red(consts_1.MODULE_NAME), 'Failed to get task summary ready info', error.message);
+            return res.status(500).json({
+                error: 'Failed to get task summary ready info',
                 message: error.message,
             });
         }

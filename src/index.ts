@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { Router } from "express";
 import { MODULE_NAME } from "./consts";
-import { registerGetTaskStatus, registerMemorizeConversation, registerRetrieveDefaultCategories } from "./memu-endpoint";
+import { registerGetTaskStatus, registerGetTaskSummaryReady, registerMemorizeConversation, registerRetrieveDefaultCategories } from "./memu-endpoint";
 
 interface PluginInfo {
   id: string;
@@ -21,6 +21,7 @@ interface Plugin {
  */
 export async function init(router: Router): Promise<void> {
   registerGetTaskStatus(router);
+  registerGetTaskSummaryReady(router);
   registerRetrieveDefaultCategories(router);
   registerMemorizeConversation(router);
   console.log(chalk.green(MODULE_NAME), 'Plugin initialized');

@@ -33,6 +33,33 @@ export function registerGetTaskStatus(router: Router): void {
     });
 }
 
+export function registerGetTaskSummaryReady(router: Router): void {
+    router.post('/getTaskSummaryReady', jsonParser, async (req, res) => {
+        try {
+            const { apiKey, timeout, taskId } = req.body as {
+                apiKey: string,
+                timeout: number,
+                taskId: string,
+            };
+            if (!apiKey || !taskId) {
+                return res.status(400).json({
+                    error: 'Invalid request',
+                    message: 'apiKey and taskId are required',
+                });
+            }
+            const client = createMemuClient(apiKey, timeout);
+            const summaryReady = await client.getTaskSummaryReady(taskId);
+            return res.json(summaryReady);
+        } catch (error: any) {
+            console.error(chalk.red(MODULE_NAME), 'Failed to get task summary ready info', error.message);
+            return res.status(500).json({
+                error: 'Failed to get task summary ready info',
+                message: error.message,
+            });
+        }
+    });
+}
+
 export function registerRetrieveDefaultCategories(router: Router): void {
     router.post('/retrieveDefaultCategories', jsonParser, async (req, res) => {
         try {
