@@ -12210,7 +12210,7 @@ function registerGetTaskSummaryReady(router) {
 function registerRetrieveDefaultCategories(router) {
     router.post('/retrieveDefaultCategories', jsonParser, async (req, res) => {
         try {
-            const { apiKey, userId, agentId, includeInactive } = req.body;
+            const { apiKey, userId, agentId } = req.body;
             if (!apiKey || !userId) {
                 return res.status(400).json({
                     error: 'Invalid request',
@@ -12221,7 +12221,6 @@ function registerRetrieveDefaultCategories(router) {
             const categories = await client.retrieveDefaultCategories({
                 userId: userId,
                 agentId: agentId,
-                includeInactive: includeInactive,
             });
             return res.json(categories);
         }

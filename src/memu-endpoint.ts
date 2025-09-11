@@ -63,11 +63,10 @@ export function registerGetTaskSummaryReady(router: Router): void {
 export function registerRetrieveDefaultCategories(router: Router): void {
     router.post('/retrieveDefaultCategories', jsonParser, async (req, res) => {
         try {
-            const { apiKey, userId, agentId, includeInactive } = req.body as {
+            const { apiKey, userId, agentId } = req.body as {
                 apiKey: string,
                 userId: string,
                 agentId?: string,
-                includeInactive?: boolean,
             };
             if (!apiKey || !userId) {
                 return res.status(400).json({
@@ -79,7 +78,6 @@ export function registerRetrieveDefaultCategories(router: Router): void {
             const categories = await client.retrieveDefaultCategories({
                 userId: userId,
                 agentId: agentId,
-                includeInactive: includeInactive,
             });
             return res.json(categories);
         } catch (error: any) {
