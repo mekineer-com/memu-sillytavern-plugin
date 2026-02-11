@@ -1,5 +1,9 @@
 <div align="center">
 
+REQUIRES:<br>
+https://github.com/mekineer-com/memu/<br>
+https://github.com/mekineer-com/memu-sillytavern-extension/
+
 Community fork (unofficial).<br>
 Upstream: (https://github.com/NevaMind-AI/memu-sillytavern-plugin)<br>
 Purpose: SillyTavern integration + memU bridge improvements (Local/API routing, build fixes, etc.).<br>
