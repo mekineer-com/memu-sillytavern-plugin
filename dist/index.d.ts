@@ -9,10 +9,6 @@ interface Plugin {
     exit: () => Promise<void>;
     info: PluginInfo;
 }
-/**
- * Initialize the plugin.
- * @param router Express Router
- */
 export declare function init(router: Router): Promise<void>;
 export declare function exit(): Promise<void>;
 export declare const info: PluginInfo;
