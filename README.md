@@ -1,5 +1,9 @@
 <div align="center">
 
+When you enter a new chat, memU will start to memorize for the entire chat, so be careful not to enter a huge chat or you will have a large token spend.
+
+For any issues or suggestions, please contact mekineer@gmail.com.
+
 REQUIRES:<br>
 [https://github.com/NevaMind-AI/memU/](https://github.com/NevaMind-AI/memU/releases/tag/v1.4.0)<br>
 https://github.com/mekineer-com/memu-sillytavern-extension/
