@@ -14,7 +14,7 @@ License: see LICENSE (upstream license applies).
 
 ### MemU Plugin for SillyTavern
 
-Server plugin to proxy the memu SDK. Required by [MemU-Extension](https://github.com/NevaMind-AI/memu-sillytavern-extension).
+Server plugin to proxy the memu SDK. Required by [MemU-Extension](https://github.com/mekineer-com/memu-sillytavern-extension/)).
 
 </div>
 
