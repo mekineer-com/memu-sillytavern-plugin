@@ -3,12 +3,13 @@ import type { Request, Response } from "express";
 /**
  * NOTE:
  *  - Cloud mode: proxy to memU SaaS (memu-js)
- *  - Local mode: launch local Python memU per operation (simple + robust)
+ *  - Local mode: long-lived Python bridge (daemon) that talks to memU locally
  *
  * Local mode goal:
  *  - Reuse SillyTavern connection profiles (base_url + model)
  *  - Reuse SillyTavern secrets.json keys (best-effort; ST doesn't bind keys to profiles)
- *  - Persist per (userId, agentId) via sqlite DB under <ST_ROOT>/data/memu-local/
+ *  - By default, the metadata store is in-memory. For persistence, switch dbProvider to Postgres.
+ *  - Local blob resources are stored under <ST_ROOT>/data/memu-local/
  */
 type MemuMode = "cloud" | "local";
 type MemuStep = "preprocess" | "memory_extract" | "category_update" | "reflection" | "ranking" | "embeddings";
@@ -45,6 +46,7 @@ export declare function listModelsForProfile(profileId: string, opts?: {
     models: string[];
     message?: string;
 }>;
+export declare function getLocalBridgeSessionId(): string | null;
 export declare function proxyMemorizeConversation(req: Request, res: Response): Promise<void>;
 export declare function proxyGetTaskStatus(req: Request, res: Response): Promise<void>;
 export declare function proxyGetTaskSummaryReady(req: Request, res: Response): Promise<void>;

@@ -3,7 +3,7 @@ import chalk from "chalk";
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { MemuClient } from "memu-js";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -12,12 +12,13 @@ import { MEMU_BASE_URL, MEMU_DEFAULT_MAX_RETRIES, MEMU_DEFAULT_TIMEOUT, MODULE_N
 /**
  * NOTE:
  *  - Cloud mode: proxy to memU SaaS (memu-js)
- *  - Local mode: launch local Python memU per operation (simple + robust)
+ *  - Local mode: long-lived Python bridge (daemon) that talks to memU locally
  *
  * Local mode goal:
  *  - Reuse SillyTavern connection profiles (base_url + model)
  *  - Reuse SillyTavern secrets.json keys (best-effort; ST doesn't bind keys to profiles)
- *  - Persist per (userId, agentId) via sqlite DB under <ST_ROOT>/data/memu-local/
+ *  - By default, the metadata store is in-memory. For persistence, switch dbProvider to Postgres.
+ *  - Local blob resources are stored under <ST_ROOT>/data/memu-local/
  */
 
 type MemuMode = "cloud" | "local";
@@ -46,7 +47,6 @@ interface MemuPluginConfig {
 }
 
 const CONFIG_FILENAME = "memu-plugin.config.json";
-const CONFIG_PATH = path.join(process.cwd(), CONFIG_FILENAME);
 
 const DEFAULT_CONFIG: MemuPluginConfig = {
   version: 1,
@@ -55,6 +55,70 @@ const DEFAULT_CONFIG: MemuPluginConfig = {
   stepProfileId: {},
   updatedAt: new Date().toISOString(),
 };
+
+// -----------------------------
+// SillyTavern root + config path
+// -----------------------------
+
+let _stRootCached: string | null = null;
+
+function _isSillyTavernRoot(dir: string): boolean {
+  try {
+    const pkg = readJsonIfExists(path.join(dir, 'package.json'));
+    const name = String(pkg?.name || '').toLowerCase();
+    if (name !== 'sillytavern') return false;
+    if (!fs.existsSync(path.join(dir, 'data'))) return false;
+    if (!fs.existsSync(path.join(dir, 'plugins'))) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function _walkUpDirs(start: string, maxHops: number = 10): string[] {
+  const out: string[] = [];
+  let cur = path.resolve(start);
+  for (let i = 0; i < maxHops; i++) {
+    out.push(cur);
+    const parent = path.dirname(cur);
+    if (!parent || parent === cur) break;
+    cur = parent;
+  }
+  return out;
+}
+
+function getStRoot(): string {
+  if (_stRootCached) return _stRootCached;
+
+  const fromCwd = _walkUpDirs(process.cwd());
+  const fromPlugin = _walkUpDirs(path.resolve(__dirname, '..', '..', '..')); // dist -> plugin -> plugins -> ST root
+
+  for (const dir of [...fromCwd, ...fromPlugin]) {
+    if (_isSillyTavernRoot(dir)) {
+      _stRootCached = dir;
+      return dir;
+    }
+  }
+
+  // Fallback: process.cwd() (older ST launchers usually set this correctly).
+  _stRootCached = process.cwd();
+  return _stRootCached;
+}
+
+function getConfigPath(): string {
+  return path.join(getStRoot(), CONFIG_FILENAME);
+}
+
+function ensureConfigFileExists(): void {
+  const cfgPath = getConfigPath();
+  try {
+    if (fs.existsSync(cfgPath)) return;
+    fs.writeFileSync(cfgPath, JSON.stringify({ ...DEFAULT_CONFIG, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
+  } catch {
+    // ignore (non-fatal)
+  }
+}
+
 
 function readJsonIfExists(filePath: string): any | null {
   try {
@@ -125,7 +189,8 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
 }
 
 function readPluginConfig(): MemuPluginConfig {
-  const obj = readJsonIfExists(CONFIG_PATH);
+  ensureConfigFileExists();
+  const obj = readJsonIfExists(getConfigPath());
   if (!obj) return { ...DEFAULT_CONFIG };
   return sanitizeIncomingConfig(obj);
 }
@@ -136,7 +201,7 @@ export function getPluginConfig(): MemuPluginConfig {
 export function setPluginConfig(obj: any): MemuPluginConfig {
   const cfg = sanitizeIncomingConfig(obj);
   try {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
+    fs.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
   } catch (e) {
     // non-fatal
     console.warn(chalk.yellow(MODULE_NAME), 'Failed to write config:', e);
@@ -148,10 +213,114 @@ function isLocalMode(): boolean {
   return readPluginConfig().mode === "local";
 }
 
-function getPythonCmd(cfg: MemuPluginConfig): string {
-  if (cfg.pythonCmd) return cfg.pythonCmd;
-  return process.platform === "win32" ? "python" : "python3";
+type PythonProbe = { ok: boolean; version?: string; error?: string };
+
+function _looksLikeFilePath(cmd: string): boolean {
+  // If it contains a slash/backslash, it's almost certainly a path.
+  return /[\/]/.test(cmd) || cmd.toLowerCase().endsWith('.exe') || cmd.startsWith('.') || cmd.startsWith('~');
 }
+
+function probePythonForMemu(pythonCmd: string): PythonProbe {
+  try {
+    const code = `import importlib.metadata as m
+try:
+    print(m.version("memu"))
+except Exception:
+    import memu
+    print(getattr(memu, "__version__", ""))`;
+
+    const r = spawnSync(
+      pythonCmd,
+      ['-c', code],
+      { encoding: 'utf8', timeout: 5000, env: process.env }
+    );
+
+    const stdout = String(r.stdout || '').trim();
+    const stderr = String(r.stderr || '').trim();
+
+    if (r.error) {
+      return { ok: false, error: r.error.message || String(r.error) };
+    }
+    if ((r.status ?? 1) !== 0) {
+      return { ok: false, error: stderr || `python exited with status ${r.status}` };
+    }
+    return { ok: true, version: stdout || undefined };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+function resolvePythonCmdForLocal(cfg: MemuPluginConfig): { pythonCmd: string; probe: PythonProbe; tried: string[] } {
+  const stRoot = getStRoot();
+  const isWin = process.platform === 'win32';
+
+  const envOverride =
+    (typeof process.env.MEMU_PYTHON === 'string' && process.env.MEMU_PYTHON.trim()) ||
+    (typeof process.env.MEMU_PYTHON_CMD === 'string' && process.env.MEMU_PYTHON_CMD.trim()) ||
+    '';
+
+  const venvCandidate = isWin
+    ? path.join(stRoot, '.venv', 'Scripts', 'python.exe')
+    : path.join(stRoot, '.venv', 'bin', 'python');
+
+  const candidatesRaw = [
+    cfg.pythonCmd || '',
+    envOverride,
+    venvCandidate,
+    isWin ? 'python' : 'python3',
+    'python',
+  ].filter(Boolean);
+
+  const candidates: string[] = [];
+  for (const c of candidatesRaw) {
+    const v = String(c).trim();
+    if (!v) continue;
+    if (!candidates.includes(v)) candidates.push(v);
+  }
+
+  let best: { pythonCmd: string; probe: PythonProbe } | null = null;
+  const tried: string[] = [];
+
+  for (const cmd of candidates) {
+    tried.push(cmd);
+    if (_looksLikeFilePath(cmd) && !fs.existsSync(cmd)) {
+      const probe = { ok: false, error: `Path not found: ${cmd}` };
+      if (!best) best = { pythonCmd: cmd, probe };
+      continue;
+    }
+
+    const probe = probePythonForMemu(cmd);
+    if (probe.ok) {
+      return { pythonCmd: cmd, probe, tried };
+    }
+
+    if (!best) best = { pythonCmd: cmd, probe };
+  }
+
+  // No candidate could import memu; return the first/best failure so we can show a helpful message.
+  const fallbackCmd = best?.pythonCmd || (isWin ? 'python' : 'python3');
+  const fallbackProbe = best?.probe || { ok: false, error: 'No candidates tried' };
+  return { pythonCmd: fallbackCmd, probe: fallbackProbe, tried };
+}
+
+function localPythonSetupHint(pythonCmd: string, probe: PythonProbe, tried: string[]): string {
+  const cfgPath = getConfigPath();
+  const err = probe?.error ? ` (${probe.error})` : '';
+  const triedLine = tried.length ? ` Tried: ${tried.join(', ')}` : '';
+
+  return [
+    `memU local mode can't start because Python can't import the 'memu' package using: ${pythonCmd}${err}.`,
+    `Fix: install memU into that Python, or set "pythonCmd" in ${cfgPath} to the Python inside your memU venv.`,
+    triedLine,
+  ].filter(Boolean).join(' ');
+}
+
+function getPythonCmd(cfg: MemuPluginConfig): string {
+  // Keep backward compatibility: if someone calls this directly, behave like before.
+  if (cfg.pythonCmd) return cfg.pythonCmd;
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
 
 // -----------------------------
 // Local: ST connection profiles
@@ -160,7 +329,7 @@ function getPythonCmd(cfg: MemuPluginConfig): string {
 type AnyObject = Record<string, any>;
 
 function listSTUserDirs(): string[] {
-  const root = process.cwd();
+  const root = getStRoot();
   const dataDir = path.join(root, "data");
   const dirs: string[] = [];
 
@@ -648,16 +817,62 @@ function safeFsName(v: string): string {
 }
 
 function getLocalBaseDir(): string {
-  return path.join(process.cwd(), "data", "memu-local");
+  return path.join(getStRoot(), "data", "memu-local");
 }
 
-function buildLocalPaths(userId: string, agentId: string): { baseDir: string; dbPath: string; resourcesDir: string } {
+function buildLocalPaths(userId: string, agentId: string): { baseDir: string; resourcesDir: string } {
   const baseDir = path.join(getLocalBaseDir(), safeFsName(userId), safeFsName(agentId));
-  const dbPath = path.join(baseDir, "memu.sqlite");
   const resourcesDir = path.join(baseDir, "resources");
   fs.mkdirSync(resourcesDir, { recursive: true });
-  return { baseDir, dbPath, resourcesDir };
+  return { baseDir, resourcesDir };
 }
+
+const DEFAULT_MEMORY_CATEGORIES = [
+  {
+    name: 'assistant_state',
+    description: 'Facts about the assistant: identity/persona, continuity, memory gaps, long-term goals, and any stable traits that should persist across chats.',
+  },
+  {
+    name: 'personal_info',
+    description: "Stable facts about the user (name, background, recurring preferences that don't fit elsewhere).",
+  },
+  {
+    name: 'preferences',
+    description: 'User likes/dislikes, UI/style preferences, and stable choices the assistant should remember.',
+  },
+  {
+    name: 'relationships',
+    description: 'Important relationships between the user and others (including the assistant), and how they relate.',
+  },
+  {
+    name: 'activities',
+    description: 'Regular activities, hobbies, and routines.',
+  },
+  {
+    name: 'goals',
+    description: 'Short and long term goals and plans.',
+  },
+  {
+    name: 'experiences',
+    description: 'Notable past events and experiences worth remembering.',
+  },
+  {
+    name: 'knowledge',
+    description: 'Domain knowledge the user has, projects, or factual context the assistant should reuse.',
+  },
+  {
+    name: 'opinions',
+    description: 'Opinions or stances that are stable and useful for future conversation.',
+  },
+  {
+    name: 'habits',
+    description: 'Habits (sleep, work patterns, recurring behaviors) that affect interaction.',
+  },
+  {
+    name: 'work_life',
+    description: 'Work setup, tools, and constraints (e.g., OS, hardware, environment).',
+  },
+];
 
 function buildMemuPayloadForLocal(
   cfg: MemuPluginConfig,
@@ -665,7 +880,7 @@ function buildMemuPayloadForLocal(
   agentId: string,
   conversation?: any
 ): any {
-  const { dbPath, resourcesDir } = buildLocalPaths(userId, agentId);
+  const { resourcesDir } = buildLocalPaths(userId, agentId);
 
   const step = (s: MemuStep): string => cfg.stepProfileId?.[s] || cfg.defaultProfileId || "default";
 
@@ -730,6 +945,7 @@ function buildMemuPayloadForLocal(
 
   // Minimal per-step routing
   const memorize_config: any = {
+    memory_categories: DEFAULT_MEMORY_CATEGORIES,
     preprocess_llm_profile: idToName(step("preprocess")),
     memory_extract_llm_profile: idToName(step("memory_extract")),
     category_update_llm_profile: idToName(step("category_update")),
@@ -768,6 +984,7 @@ function buildMemuPayloadForLocal(
 
   const payload: any = {
     service_key: `${safeFsName(userId)}__${safeFsName(agentId)}`,
+    user: { user_id: userId, agent_id: agentId },
     llm_profiles,
     database_config,
     blob_config,
@@ -786,6 +1003,16 @@ type BridgeOp = "health" | "memorize" | "list_categories";
 type BridgeRequest = { id: string; op: BridgeOp; payload?: any };
 type BridgeResponse = { id: string; ok: boolean; op?: string; error?: string; [k: string]: any };
 
+const _bridgeLogLines: string[] = [];
+
+function _pushBridgeLogLine(line: string) {
+  const ts = new Date().toISOString();
+  const cleaned = String(line || '').trim();
+  if (!cleaned) return;
+  _bridgeLogLines.push(`[${ts}] ${cleaned}`);
+  if (_bridgeLogLines.length > 400) _bridgeLogLines.splice(0, _bridgeLogLines.length - 400);
+}
+
 let _localBridge:
   | {
       pythonCmd: string;
@@ -794,6 +1021,12 @@ let _localBridge:
       pending: Map<string, { resolve: (v: any) => void; reject: (e: any) => void; t: any }>;
     }
   | null = null;
+
+let _localBridgeSessionId: string | null = null;
+
+export function getLocalBridgeSessionId(): string | null {
+  return _localBridgeSessionId;
+}
 
 function ensureLocalBridge(pythonCmd: string, scriptPath: string) {
   if (_localBridge && _localBridge.pythonCmd === pythonCmd && _localBridge.child.exitCode === null) return;
@@ -816,6 +1049,11 @@ function ensureLocalBridge(pythonCmd: string, scriptPath: string) {
     buf: "",
     pending: new Map<string, { resolve: (v: any) => void; reject: (e: any) => void; t: any }>(),
   };
+
+  // New bridge process = new in-memory DB session.
+  _localBridgeSessionId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  // Local task state is tied to the bridge.
+  try { localTasks.clear(); } catch { }
 
   child.stdout.on("data", (d) => {
     bridge.buf += d.toString("utf8");
@@ -854,8 +1092,13 @@ function ensureLocalBridge(pythonCmd: string, scriptPath: string) {
 
   // Helpful stderr logging (doesn't affect protocol)
   child.stderr.on("data", (d) => {
-    const s = d.toString("utf8").trim();
-    if (s) console.warn("[memu-local-bridge]", s);
+    const raw = d.toString("utf8");
+    for (const line of raw.split(/\r?\n/)) {
+      const s = line.trim();
+      if (!s) continue;
+      _pushBridgeLogLine(s);
+      console.warn("[memu-local-bridge]", s);
+    }
   });
 
   _localBridge = bridge;
@@ -863,7 +1106,11 @@ function ensureLocalBridge(pythonCmd: string, scriptPath: string) {
 
 async function runLocalPythonOp(op: BridgeOp, payload?: any): Promise<any> {
   const cfg = readPluginConfig();
-  const pythonCmd = getPythonCmd(cfg);
+  const resolved = resolvePythonCmdForLocal(cfg);
+  if (!resolved.probe.ok) {
+    throw new Error(localPythonSetupHint(resolved.pythonCmd, resolved.probe, resolved.tried));
+  }
+  const pythonCmd = resolved.pythonCmd;
 
   const pluginRoot = path.resolve(__dirname, ".."); // dist -> plugin root
   const scriptPath = path.join(pluginRoot, "py", "memu_st_bridge.py");
@@ -1045,13 +1292,15 @@ export async function proxyRetrieveDefaultCategories(req: Request, res: Response
     const apiKey = req.body?.apiKey;
     const userId = req.body?.userId;
     const agentId = req.body?.agentId;
-    if (!apiKey || !userId || !agentId) {
-      res.status(400).json({ error: "Missing apiKey or userId/agentId" });
+  if (!apiKey || !userId) {
+      res.status(400).json({ error: "Missing apiKey or userId" });
       return;
     }
     const client = newClient(apiKey, req.body?.timeout, req.body?.maxRetries);
     try {
-      const response = await client.retrieveDefaultCategories({ userId, agentId });
+      const params: any = { userId };
+      if (agentId) params.agentId = agentId;
+      const response = await client.retrieveDefaultCategories(params);
       res.json(response);
     } catch (error: any) {
       console.error(chalk.red(MODULE_NAME), "Error in retrieveDefaultCategories:", error);
@@ -1072,7 +1321,14 @@ export async function proxyRetrieveDefaultCategories(req: Request, res: Response
     const payload = buildMemuPayloadForLocal(cfg, userId, agentId);
     const resp = await runLocalPythonOp("list_categories", payload);
 
-    const categories = resp?.result?.categories || resp?.result?.response?.categories || [];
+    // The local Python bridge returns categories at top-level "categories".
+    // Keep fallbacks for older wrappers.
+    const categories =
+      (resp && (resp as any).categories) ||
+      (resp && (resp as any).result?.categories) ||
+      (resp && (resp as any).result?.response?.categories) ||
+      (resp && (resp as any).response?.categories) ||
+      [];
     // Ensure response shape matches memu-js: { categories: [...] }
     res.json({ categories });
   } catch (error: any) {
@@ -1087,8 +1343,14 @@ export async function proxyLocalHealth(req: Request, res: Response): Promise<voi
     return;
   }
   try {
+    const cfg = readPluginConfig();
+    const resolved = resolvePythonCmdForLocal(cfg);
+    if (!resolved.probe.ok) {
+      res.status(500).json({ ok: false, mode: "local", error: localPythonSetupHint(resolved.pythonCmd, resolved.probe, resolved.tried) });
+      return;
+    }
     const resp = await runLocalPythonOp("health");
-    res.json({ ok: true, mode: "local", python: getPythonCmd(readPluginConfig()), bridge: resp });
+    res.json({ ok: true, mode: "local", python: resolved.pythonCmd, memu_version: resolved.probe.version, bridge: resp, st_root: getStRoot() });
   } catch (e: any) {
     res.status(500).json({ ok: false, mode: "local", error: e?.message || String(e) });
   }
@@ -1117,4 +1379,13 @@ export function registerRetrieveDefaultCategories(router: Router): void {
 
 export function registerLocalHealth(router: Router): void {
   router.get("/health", proxyLocalHealth);
+
+  router.get("/bridge/logs", (_req: Request, res: Response) => {
+    return res.json({ ok: true, lines: _bridgeLogLines.slice(-200) });
+  });
+
+  router.get("/bridge/logs.txt", (_req: Request, res: Response) => {
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    return res.status(200).send(_bridgeLogLines.join('\n'));
+  });
 }
