@@ -1,16 +1,27 @@
 <div align="center">
 
+When you enter a new chat, memU will start to memorize for the entire chat, so be careful not to enter a huge chat or you will have a large token spend.
+
+For any issues or suggestions, please contact mekineer@gmail.com.
+
+REQUIRES:<br>
+https://github.com/mekineer-com/memu-sillytavern-extension/<br>
+https://github.com/mekineer-com/mcp-memu-server/<br>
+[https://github.com/mekineer-com/memU/](https://github.com/mekineer-com/memU/)<br>
+Can be run on Python 3.12 by changing versions in the memU config files including pyproject.toml.<br>
+Compatibility includes Alpine 3.23.
+
 Community fork (unofficial).<br>
 Upstream: (https://github.com/NevaMind-AI/memu-sillytavern-plugin)<br>
-Purpose: SillyTavern integration + local memU server routing/build fixes.<br>
-Not affiliated with upstream hosted services.<br>
+Purpose: SillyTavern integration + memU bridge improvements (Local/API routing, build fixes, etc.).<br>
+Not affiliated with upstream/app.memu.so.<br>
 License: see LICENSE (upstream license applies).
 
 ![MemUxST Banner](public/banner.png)
 
 ### MemU Plugin for SillyTavern
 
-Server plugin to proxy the memu SDK. Required by [MemU-Extension](https://github.com/NevaMind-AI/memu-sillytavern-extension).
+Server plugin used by [MemU-Extension](https://github.com/mekineer-com/memu-sillytavern-extension/) to talk to a local `mcp-memu-server`.
 
 </div>
 
@@ -24,7 +35,7 @@ Server plugin to proxy the memu SDK. Required by [MemU-Extension](https://github
 
 ```bash
 cd plugins
-git clone https://github.com/mekineer-com/memu-sillytavern-extension
+git clone https://github.com/mekineer-com/memu-sillytavern-plugin
 ```
 
 3. Restart the SillyTavern server.
@@ -48,18 +59,19 @@ This plugin stores its settings in a file named `memu-plugin.config.json` in you
 - The file is **auto-created** the first time the plugin runs.
 - The MemU browser extension normally updates it by calling `GET/POST /api/plugins/memu/config`.
 
-### Local mode: how the plugin finds memU
+### Local mode: how the plugin runs
 
-In **local mode**, the plugin uses the external `mcp-memu-server` HTTP service.
+In **local mode**, the plugin talks to an external HTTP service: `mcp-memu-server`.
 
-- `serverPath` in `memu-plugin.config.json` points to that repo folder (default: `~/apps/mcp-memu-server`).
-- The plugin starts `run.py` from that folder when needed.
-- The plugin discovers base URL from:
-  - `MEMU_SERVER_URL` / `MCP_MEMU_SERVER_URL`, or
-  - `<serverPath>/config.json` listen host/port, or
-  - fallback `http://127.0.0.1:8099`.
+- `serverPath` points to your `mcp-memu-server` folder (for example: `/path/to/mcp-memu-server`).
+- Base URL is resolved in this order:
+  1. `MEMU_SERVER_URL` / `MCP_MEMU_SERVER_URL`
+  2. `<serverPath>/config.json` listen host/port
+  3. fallback `http://127.0.0.1:8099`
+- If `autoStartServer` is enabled and `<serverPath>/run.py` exists, the plugin can start the server automatically.
+- The plugin chooses Python from `mcp-memu-server` config/venv when available, else falls back to `python3`.
 
-Use `/api/plugins/memu/health` and `/api/plugins/memu/server/status` to verify local runtime health.
+`memU` is still required, but it is loaded by `mcp-memu-server` (not by a plugin-local bridge process).
 
 
 ## License
@@ -67,13 +79,5 @@ Use `/api/plugins/memu/health` and `/api/plugins/memu/server/status` to verify l
 AGPLv3
 
 
-### Build Compatibility Notes
-
-- `buildfix-v0.0.2` requires **custom memU** tag `v0.0.2-buildfix` (based on `v1.2.0`).
-- `buildfix-v0.0.3` requires **standard/upstream memU `v1.4.0`**.
-- Current development branch (next push) requires:
-  - **custom memU** branch `buildfix-v0.0.4-dev` (based on `v1.4.0`), and
-  - **custom `mcp-memu-server`**.
-
-For exact commit pins per build, see workspace manifest:
-- `release-manifest/builds.yaml`
+### memU v1.4+ only
+This release targets `memU` >= `1.4.0` via `mcp-memu-server`.
