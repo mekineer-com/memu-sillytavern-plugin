@@ -24638,7 +24638,7 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
     };
     const payload = {
         service_key: `${safeFsName(userId)}__${safeFsName(characterId)}`,
-        user: { user_id: userId, soul_id: characterId, agent_id: characterId },
+        user: { user_id: userId, soul_id: characterId },
         llm_profiles,
         memorize_config,
         retrieve_config,
@@ -25138,8 +25138,8 @@ async function proxyMemorizeConversation(req, res) {
     const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
     // KISS: soul scope is the character name.
     // If characterId is missing, fall back to characterName (and vice-versa).
-    const characterId = String(req.body?.soulId || req.body?.soulName || req.body?.agentId || req.body?.agentName || "");
-    const characterName = String(req.body?.soulName || req.body?.soulId || req.body?.agentName || req.body?.agentId || "");
+    const characterId = String(req.body?.soulId || req.body?.soulName || "");
+    const characterName = String(req.body?.soulName || req.body?.soulId || "");
     const chatFileName = String(req.body?.chatFileName || "");
     const conversation = req.body?.conversation;
     const timeZone = String(req.body?.timeZone || "").trim();
@@ -25192,7 +25192,7 @@ async function proxyGetTaskSummaryReady(req, res) {
 }
 async function proxyRetrieveDefaultCategories(req, res) {
     const userId = String(req.body?.userId || "");
-    const characterId = String(req.body?.soulId || req.body?.soulName || req.body?.agentId || req.body?.agentName || "");
+    const characterId = String(req.body?.soulId || req.body?.soulName || "");
     if (!userId || !characterId) {
         res.status(400).json({ error: "Missing userId/soulId(character name)" });
         return;
@@ -25229,7 +25229,7 @@ async function proxyRetrieveDefaultCategories(req, res) {
             const srv2 = srv || await ensureLocalServer(cfg);
             // POST /categories/search uses _get_service_from_payload() (API keys from ST profiles).
             const payload = payloadBase;
-            payload.user = { user_id: userId, soul_id: characterId, agent_id: characterId };
+            payload.user = { user_id: userId, soul_id: characterId };
             const resp = await httpJson(srv2.baseUrl, '/categories/search', 'POST', payload);
             storedCats = Array.isArray(resp?.categories) ? resp.categories : [];
         }
@@ -25285,7 +25285,7 @@ async function proxyRetrieveDefaultCategories(req, res) {
 }
 async function proxyScopeStorageProbe(req, res) {
     const userId = String(req.body?.userId || "");
-    const soulId = String(req.body?.soulId || req.body?.soulName || req.body?.agentId || req.body?.agentName || "");
+    const soulId = String(req.body?.soulId || req.body?.soulName || "");
     if (!userId || !soulId) {
         res.status(400).json({ error: "Missing userId/soulId(character name)" });
         return;
@@ -25303,7 +25303,6 @@ async function proxyScopeStorageProbe(req, res) {
                 ok: true,
                 userId,
                 soulId,
-                agentId: soulId,
                 provider,
                 missing: false,
                 empty: false,
@@ -25317,7 +25316,6 @@ async function proxyScopeStorageProbe(req, res) {
                 ok: true,
                 userId,
                 soulId,
-                agentId: soulId,
                 provider,
                 missing: false,
                 empty: false,
@@ -25332,7 +25330,6 @@ async function proxyScopeStorageProbe(req, res) {
                 ok: false,
                 userId,
                 soulId,
-                agentId: soulId,
                 provider,
                 reason: "sqlite_dir_missing",
             });
@@ -25346,7 +25343,6 @@ async function proxyScopeStorageProbe(req, res) {
                 ok: true,
                 userId,
                 soulId,
-                agentId: soulId,
                 provider,
                 dbPath,
                 exists: false,
@@ -25371,7 +25367,6 @@ async function proxyScopeStorageProbe(req, res) {
                 ok: true,
                 userId,
                 soulId,
-                agentId: soulId,
                 provider,
                 dbPath,
                 exists: true,
@@ -25387,14 +25382,12 @@ async function proxyScopeStorageProbe(req, res) {
         const q = new URLSearchParams();
         q.set("user_id", userId);
         q.set("soul_id", soulId);
-        q.set("agent_id", soulId);
         const counts = await httpJson(srv.baseUrl, `/diag/sqlite/counts?${q.toString()}`, "GET");
         if (!counts || counts.ok !== true || !counts.tables || typeof counts.tables !== "object") {
             res.json({
                 ok: true,
                 userId,
                 soulId,
-                agentId: soulId,
                 provider,
                 dbPath,
                 exists: true,
@@ -25417,7 +25410,6 @@ async function proxyScopeStorageProbe(req, res) {
             ok: true,
             userId,
             soulId,
-            agentId: soulId,
             provider,
             dbPath,
             exists: true,
@@ -25434,7 +25426,6 @@ async function proxyScopeStorageProbe(req, res) {
             ok: false,
             userId,
             soulId,
-            agentId: soulId,
             reason: e?.message || String(e),
         });
     }
