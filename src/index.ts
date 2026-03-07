@@ -14,7 +14,7 @@ import {
   registerLocalHealth,
   getConnectionProfilesSummary,
   listModelsForProfile,
-  externalServerStatus,
+  externalServerPingInfo,
   getPluginConfig,
   setPluginConfig,
   registerServerControl,
@@ -38,7 +38,7 @@ function registerMetaEndpoints(router: Router) {
     let ephemeralDb: boolean | null = null;
 
     try {
-      const st = await externalServerStatus();
+      const st = await externalServerPingInfo();
       serverInstanceId = (st && typeof (st as any).serverInstanceId === 'string') ? (st as any).serverInstanceId : null;
       ephemeralDb = (st && typeof (st as any).ephemeralDb === 'boolean') ? (st as any).ephemeralDb : null;
     } catch {

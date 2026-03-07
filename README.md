@@ -13,8 +13,8 @@ Compatibility includes Alpine 3.23.
 
 Community fork (unofficial).<br>
 Upstream: (https://github.com/NevaMind-AI/memu-sillytavern-plugin)<br>
-Purpose: SillyTavern integration + memU bridge improvements (Local/API routing, build fixes, etc.).<br>
-Not affiliated with upstream/app.memu.so.<br>
+Purpose: SillyTavern integration + memU service improvements (Local/API routing, build fixes, etc.).<br>
+Not affiliated with upstream.<br>
 License: see LICENSE (upstream license applies).
 
 ![MemUxST Banner](public/banner.png)
@@ -71,7 +71,7 @@ In **local mode**, the plugin talks to an external HTTP service: `mcp-memu-serve
 - If `autoStartServer` is enabled and `<serverPath>/run.py` exists, the plugin can start the server automatically.
 - The plugin chooses Python from `mcp-memu-server` config/venv when available, else falls back to `python3`.
 
-`memU` is still required, but it is loaded by `mcp-memu-server` (not by a plugin-local bridge process).
+`memU` is still required, but it is loaded by `mcp-memu-server` (not by a plugin-local helper process).
 
 
 ## License

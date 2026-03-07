@@ -1339,6 +1339,25 @@ export async function externalServerStatus(): Promise<{ ok: boolean; running: bo
   }
 }
 
+export async function externalServerPingInfo(): Promise<{ ok: boolean; serverInstanceId?: string | null; ephemeralDb?: boolean | null }> {
+  try {
+    const cfg = readPluginConfig();
+    const baseUrl = getExternalServerBaseUrl(cfg);
+    const healthInfo = await _externalServerHealthInfo(baseUrl);
+    return {
+      ok: true,
+      serverInstanceId: healthInfo.serverInstanceId ?? _externalServerInstanceId,
+      ephemeralDb: healthInfo.ephemeralDb ?? _externalServerEphemeralDb,
+    };
+  } catch {
+    return {
+      ok: true,
+      serverInstanceId: _externalServerInstanceId,
+      ephemeralDb: _externalServerEphemeralDb,
+    };
+  }
+}
+
 export async function externalServerStart(): Promise<{ ok: boolean; message?: string; status?: any }> {
   try {
     const cfg = readPluginConfig();

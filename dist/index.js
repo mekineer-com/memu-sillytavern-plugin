@@ -23621,7 +23621,7 @@ function registerMetaEndpoints(router) {
         let serverInstanceId = null;
         let ephemeralDb = null;
         try {
-            const st = await (0, memu_endpoint_1.externalServerStatus)();
+            const st = await (0, memu_endpoint_1.externalServerPingInfo)();
             serverInstanceId = (st && typeof st.serverInstanceId === 'string') ? st.serverInstanceId : null;
             ephemeralDb = (st && typeof st.ephemeralDb === 'boolean') ? st.ephemeralDb : null;
         }
@@ -23720,6 +23720,7 @@ exports.setPluginConfig = setPluginConfig;
 exports.getConnectionProfilesSummary = getConnectionProfilesSummary;
 exports.listModelsForProfile = listModelsForProfile;
 exports.externalServerStatus = externalServerStatus;
+exports.externalServerPingInfo = externalServerPingInfo;
 exports.externalServerStart = externalServerStart;
 exports.externalServerStop = externalServerStop;
 exports.registerServerControl = registerServerControl;
@@ -24992,6 +24993,25 @@ async function externalServerStatus() {
     }
     catch (e) {
         return { ok: false, running: false, healthy: false, pid: null };
+    }
+}
+async function externalServerPingInfo() {
+    try {
+        const cfg = readPluginConfig();
+        const baseUrl = getExternalServerBaseUrl(cfg);
+        const healthInfo = await _externalServerHealthInfo(baseUrl);
+        return {
+            ok: true,
+            serverInstanceId: healthInfo.serverInstanceId ?? _externalServerInstanceId,
+            ephemeralDb: healthInfo.ephemeralDb ?? _externalServerEphemeralDb,
+        };
+    }
+    catch {
+        return {
+            ok: true,
+            serverInstanceId: _externalServerInstanceId,
+            ephemeralDb: _externalServerEphemeralDb,
+        };
     }
 }
 async function externalServerStart() {

@@ -54,6 +54,11 @@ export declare function externalServerStatus(): Promise<{
     ephemeralDb?: boolean | null;
     shutdown?: ExternalServerShutdownInfo | null;
 }>;
+export declare function externalServerPingInfo(): Promise<{
+    ok: boolean;
+    serverInstanceId?: string | null;
+    ephemeralDb?: boolean | null;
+}>;
 export declare function externalServerStart(): Promise<{
     ok: boolean;
     message?: string;
