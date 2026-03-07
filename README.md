@@ -1,26 +1,16 @@
 <div align="center">
 
-When you enter a new chat, memU will start to memorize for the entire chat, so be careful not to enter a huge chat or you will have a large token spend.
-
-For any issues or suggestions, please contact mekineer@gmail.com.
-
-REQUIRES:<br>
-https://github.com/mekineer-com/memu-sillytavern-extension/<br>
-[https://github.com/NevaMind-AI/memU/](https://github.com/NevaMind-AI/memU/releases/tag/v1.4.0)<br>
-Can be run on Python 3.12 by changing versions in the memU config files including pyproject.toml.<br>
-Compatibility includes Alpine 3.23.
-
 Community fork (unofficial).<br>
 Upstream: (https://github.com/NevaMind-AI/memu-sillytavern-plugin)<br>
-Purpose: SillyTavern integration + memU bridge improvements (Local/API routing, build fixes, etc.).<br>
-Not affiliated with upstream/app.memu.so.<br>
+Purpose: SillyTavern integration + local memU server routing/build fixes.<br>
+Not affiliated with upstream hosted services.<br>
 License: see LICENSE (upstream license applies).
 
 ![MemUxST Banner](public/banner.png)
 
 ### MemU Plugin for SillyTavern
 
-Server plugin to proxy the memu SDK. Required by [MemU-Extension](https://github.com/mekineer-com/memu-sillytavern-extension/)).
+Server plugin to proxy the memu SDK. Required by [MemU-Extension](https://github.com/NevaMind-AI/memu-sillytavern-extension).
 
 </div>
 
@@ -60,25 +50,16 @@ This plugin stores its settings in a file named `memu-plugin.config.json` in you
 
 ### Local mode: how the plugin finds memU
 
-In **local mode**, the plugin launches a small Python bridge (`py/memu_st_bridge.py`). That bridge requires the Python package **`memu`** to be installed in the Python interpreter you use.
+In **local mode**, the plugin uses the external `mcp-memu-server` HTTP service.
 
-You have two options:
+- `serverPath` in `memu-plugin.config.json` points to that repo folder (default: `~/apps/mcp-memu-server`).
+- The plugin starts `run.py` from that folder when needed.
+- The plugin discovers base URL from:
+  - `MEMU_SERVER_URL` / `MCP_MEMU_SERVER_URL`, or
+  - `<serverPath>/config.json` listen host/port, or
+  - fallback `http://127.0.0.1:8099`.
 
-1) **Use system Python**
-   - Install memU into the same Python that runs when you type `python3` (Linux/macOS) or `python` (Windows).
-   - Then you can leave `pythonCmd` unset.
-
-2) **Use a venv (recommended)**
-   - Set `pythonCmd` to the Python inside your memU venv.
-   - Examples:
-     - Linux/macOS: `/path/to/memu/.venv/bin/python`
-     - Windows: `C:\path\to\memu\.venv\Scripts\python.exe`
-
-You can also override the Python command with an environment variable:
-
-- `MEMU_PYTHON=/path/to/python`
-
-If memU can’t be imported, the plugin will now return a clear error message (and list what it tried) at `/api/plugins/memu/health`.
+Use `/api/plugins/memu/health` and `/api/plugins/memu/server/status` to verify local runtime health.
 
 
 ## License
@@ -86,5 +67,13 @@ If memU can’t be imported, the plugin will now return a clear error message (a
 AGPLv3
 
 
-### memU v1.4+ only
-This release targets memu-py >= 1.4.0. The local Python bridge will warn in logs if it detects an older memU install.
+### Build Compatibility Notes
+
+- `buildfix-v0.0.2` requires **custom memU** tag `v0.0.2-buildfix` (based on `v1.2.0`).
+- `buildfix-v0.0.3` requires **standard/upstream memU `v1.4.0`**.
+- Current development branch (next push) requires:
+  - **custom memU** branch `buildfix-v0.0.4-dev` (based on `v1.4.0`), and
+  - **custom `mcp-memu-server`**.
+
+For exact commit pins per build, see workspace manifest:
+- `release-manifest/builds.yaml`

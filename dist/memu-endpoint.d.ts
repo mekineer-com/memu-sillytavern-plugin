@@ -1,30 +1,15 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
-/**
- * NOTE:
- *  - Cloud mode: proxy to memU SaaS (memu-js)
- *  - Local mode: long-lived Python bridge (daemon) that talks to memU locally
- *
- * Local mode goal:
- *  - Reuse SillyTavern connection profiles (base_url + model)
- *  - Reuse SillyTavern secrets.json keys (best-effort; ST doesn't bind keys to profiles)
- *  - By default, the metadata store is in-memory. For persistence, switch dbProvider to Postgres.
- *  - Local blob resources are stored under <ST_ROOT>/data/memu-local/
- */
-type MemuMode = "cloud" | "local";
-type MemuStep = "preprocess" | "memory_extract" | "category_update" | "reflection" | "ranking" | "embeddings";
+type MemuStep = 'preprocess' | 'memory_extract' | 'category_update' | 'reflection' | 'ranking' | 'embeddings';
 interface MemuPluginConfig {
     version: number;
-    mode: MemuMode;
     defaultProfileId: string;
     stepProfileId: Partial<Record<MemuStep, string>>;
     updatedAt: string;
-    pythonCmd?: string;
-    /** Effective embedding model (legacy single-field). */
+    serverPath?: string;
+    autoStartServer?: boolean;
     embeddingModel?: string;
-    /** Dropdown-selected embedding model (preferred over manual). */
     embeddingModelSelected?: string;
-    /** Optional manual embedding model (used when dropdown is blank). */
     embeddingModelManual?: string;
 }
 export declare function getPluginConfig(): MemuPluginConfig;
@@ -46,15 +31,50 @@ export declare function listModelsForProfile(profileId: string, opts?: {
     models: string[];
     message?: string;
 }>;
-export declare function getLocalBridgeSessionId(): string | null;
+type ExternalServerShutdownInfo = {
+    draining: boolean;
+    stopping: boolean;
+    requestedAtUnix: number | null;
+    requestedBy: string | null;
+    reason: string | null;
+    maxWaitSec: number;
+    timedOut: boolean;
+    activeHttpRequests: number;
+    activeWorkRequests: number;
+};
+export declare function externalServerStatus(): Promise<{
+    ok: boolean;
+    running: boolean;
+    healthy: boolean;
+    pid?: number | null;
+    baseUrl?: string;
+    logPath?: string | null;
+    logTail?: string[];
+    serverInstanceId?: string | null;
+    ephemeralDb?: boolean | null;
+    shutdown?: ExternalServerShutdownInfo | null;
+}>;
+export declare function externalServerStart(): Promise<{
+    ok: boolean;
+    message?: string;
+    status?: any;
+}>;
+export declare function externalServerStop(): Promise<{
+    ok: boolean;
+    message?: string;
+    status?: any;
+}>;
+export declare function registerServerControl(router: Router): void;
 export declare function proxyMemorizeConversation(req: Request, res: Response): Promise<void>;
 export declare function proxyGetTaskStatus(req: Request, res: Response): Promise<void>;
 export declare function proxyGetTaskSummaryReady(req: Request, res: Response): Promise<void>;
 export declare function proxyRetrieveDefaultCategories(req: Request, res: Response): Promise<void>;
-export declare function proxyLocalHealth(req: Request, res: Response): Promise<void>;
+export declare function proxyScopeStorageProbe(req: Request, res: Response): Promise<void>;
+export declare function proxyLocalHealth(_req: Request, res: Response): Promise<void>;
 export declare function registerMemorizeConversation(router: Router): void;
 export declare function registerGetTaskStatus(router: Router): void;
 export declare function registerGetTaskSummaryReady(router: Router): void;
 export declare function registerRetrieveDefaultCategories(router: Router): void;
+export declare function registerScopeStorageProbe(router: Router): void;
 export declare function registerLocalHealth(router: Router): void;
 export {};

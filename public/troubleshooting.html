@@ -1,0 +1,257 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>memU Troubleshooting</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:20px;line-height:1.4;max-width:980px}
+    code,pre{background:#f2f2f2;border-radius:10px}
+    code{padding:2px 6px}
+    pre{padding:12px;overflow:auto}
+    a{word-break:break-all}
+    ul{padding-left:18px}
+    .row{display:flex;gap:16px;flex-wrap:wrap}
+    .card{border:1px solid #e6e6e6;border-radius:14px;padding:14px;flex:1;min-width:280px}
+    .muted{opacity:.75}
+    .bad{color:#a40000}
+    button{padding:7px 10px;border-radius:10px;border:1px solid #ccc;background:#fff;cursor:pointer}
+    button:hover{background:#f8f8f8}
+    input{padding:7px 10px;border-radius:10px;border:1px solid #ccc;width:min(520px,100%)}
+    label{display:block;margin:8px 0 4px}
+    .small{font-size:12px}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#f2f2f2}
+    .list{display:flex;flex-direction:column;gap:8px}
+    .prof{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .prof strong{margin-right:6px}
+  </style>
+</head>
+<body>
+  <h2>memU plugin troubleshooting</h2>
+  <p class="muted">This page reads the same endpoints the extension uses and provides direct debug actions.</p>
+
+  <div class="row">
+    <div class="card">
+      <h3>Status</h3>
+      <ul>
+        <li><a href="/api/plugins/memu/ping">/api/plugins/memu/ping</a></li>
+        <li><a href="/api/plugins/memu/health">/api/plugins/memu/health</a> <span class="muted small">(plugin-side local runtime details)</span></li>
+        <li><a href="/api/plugins/memu/server/status">/api/plugins/memu/server/status</a> <span class="muted small">(mcp-memu-server process + baseUrl)</span></li>
+      </ul>
+      <div id="modeLine" class="small muted">Loading status…</div>
+    </div>
+
+    <div class="card">
+      <h3>Config</h3>
+      <ul>
+        <li><a href="/api/plugins/memu/config">/api/plugins/memu/config</a></li>
+        <li><a href="/api/plugins/memu/profiles">/api/plugins/memu/profiles</a></li>
+      </ul>
+      <button id="btnLoadConfig">Show /config JSON</button>
+      <pre id="configOut" class="small" style="display:none"></pre>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h3>Server (local mode)</h3>
+    <p class="muted small">If <code>/server/status</code> says <code>healthy:true</code>, open <code>&lt;baseUrl&gt;/diag</code> (default server port is <code>8099</code>, not SillyTavern's <code>8000</code>).</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button id="btnServerStatus">Show /server/status JSON</button>
+      <a id="serverDiagLink" href="#" target="_blank" style="display:none">Open server /diag</a>
+    </div>
+    <pre id="serverOut" class="small" style="display:none"></pre>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h3>Profiles and models</h3>
+    <p class="muted small">Pick a profile to generate <code>/models</code> URLs automatically.</p>
+    <div id="profilesOut" class="list small muted">Loading profiles…</div>
+    <pre id="modelsOut" class="small" style="display:none"></pre>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h3>Tasks (debug)</h3>
+    <p class="muted small">Use these POST endpoints when a task seems stuck. You only need <code>taskId</code>.</p>
+
+    <label for="taskId">taskId</label>
+    <input id="taskId" placeholder="Paste taskId here" />
+
+    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+      <button id="btnTaskStatus">POST /api/plugins/memu/getTaskStatus</button>
+      <button id="btnSummaryReady">POST /api/plugins/memu/getTaskSummaryReady</button>
+    </div>
+
+    <pre id="taskOut" class="small" style="display:none"></pre>
+  </div>
+
+  <script>
+  (function(){
+    const base = "/api/plugins/memu";
+
+    function $(id){ return document.getElementById(id); }
+    function show(el){ if (el) el.style.display = ""; }
+    function hide(el){ if (el) el.style.display = "none"; }
+    function setText(el, t){ if (el) el.textContent = t; }
+    function setJson(pre, obj){
+      if (!pre) return;
+      pre.textContent = JSON.stringify(obj, null, 2);
+      show(pre);
+    }
+
+    async function fetchJson(url, opts){
+      const r = await fetch(url, opts);
+      const text = await r.text();
+      let data;
+      try { data = text ? JSON.parse(text) : null; }
+      catch { data = { raw: text }; }
+      if (!r.ok) throw Object.assign(new Error("HTTP " + r.status), { status:r.status, data });
+      return data;
+    }
+
+    async function loadStatus(){
+      const line = $("modeLine");
+      try {
+        const ping = await fetchJson(base + "/ping");
+        if (line){
+          line.classList.remove("bad");
+          line.classList.add("muted");
+          const id = (ping && typeof ping.serverInstanceId === "string") ? ping.serverInstanceId : "";
+          setText(line, "Plugin: " + ((ping && ping.ok) ? "reachable" : "unreachable") + (id ? (" • serverInstanceId=" + id) : ""));
+        }
+      } catch (e) {
+        if (line){
+          line.classList.add("bad");
+          setText(line, "Could not load status (/ping failed).");
+        }
+      }
+    }
+
+    async function onLoadConfig(){
+      const out = $("configOut");
+      try{
+        const cfg = await fetchJson(base + "/config");
+        setJson(out, cfg);
+      }catch(e){
+        setJson(out, e.data || { error: String(e) });
+      }
+    }
+
+    async function onServerStatus(){
+      const out = $("serverOut");
+      const diag = $("serverDiagLink");
+      hide(out);
+      if (diag) diag.style.display = "none";
+      try{
+        const s = await fetchJson(base + "/server/status");
+        setJson(out, s);
+        const u = (s && typeof s.baseUrl === "string") ? s.baseUrl.replace(/\/$/, "") : "";
+        if (u && diag){
+          diag.href = u + "/diag";
+          diag.style.display = "inline";
+        }
+      }catch(e){
+        setJson(out, e.data || { error: String(e) });
+      }
+    }
+
+    function makeProfileRow(p){
+      const row = document.createElement("div");
+      row.className = "prof";
+
+      const name = document.createElement("strong");
+      name.textContent = p?.name || p?.id || "(profile)";
+      row.appendChild(name);
+
+      const pill = document.createElement("span");
+      pill.className = "pill small";
+      pill.textContent = "id: " + (p?.id || "");
+      row.appendChild(pill);
+
+      const aChat = document.createElement("a");
+      aChat.href = base + "/models?profileId=" + encodeURIComponent(p.id) + "&kind=chat";
+      aChat.textContent = "Chat models";
+      aChat.style.marginLeft = "8px";
+      aChat.target = "_blank";
+      row.appendChild(aChat);
+
+      const aEmb = document.createElement("a");
+      aEmb.href = base + "/models?profileId=" + encodeURIComponent(p.id) + "&kind=embedding";
+      aEmb.textContent = "Embedding models";
+      aEmb.style.marginLeft = "8px";
+      aEmb.target = "_blank";
+      row.appendChild(aEmb);
+
+      const btn = document.createElement("button");
+      btn.textContent = "Preview JSON";
+      btn.addEventListener("click", async () => {
+        const out = $("modelsOut");
+        hide(out);
+        try{
+          const data = await fetchJson(base + "/models?profileId=" + encodeURIComponent(p.id) + "&kind=all");
+          setJson(out, data);
+        }catch(e){
+          setJson(out, e.data || { error: String(e) });
+        }
+      });
+      row.appendChild(btn);
+
+      return row;
+    }
+
+    async function loadProfiles(){
+      const box = $("profilesOut");
+      const out = $("modelsOut");
+      hide(out);
+      try{
+        const resp = await fetchJson(base + "/profiles");
+        const profiles = Array.isArray(resp) ? resp : (resp && Array.isArray(resp.profiles) ? resp.profiles : []);
+        box.innerHTML = "";
+
+        const hint = (!Array.isArray(resp) && resp && typeof resp.message === "string" && resp.message.trim()) ? resp.message.trim() : "";
+        if (hint){
+          const h = document.createElement("div");
+          h.className = "muted";
+          h.style.marginBottom = "6px";
+          h.textContent = hint;
+          box.appendChild(h);
+        }
+
+        if (!Array.isArray(profiles) || profiles.length === 0){
+          box.appendChild(document.createTextNode("No profiles found. (Plugin couldn't read any SillyTavern user settings.json.)"));
+          return;
+        }
+        profiles.forEach(p => box.appendChild(makeProfileRow(p)));
+      }catch(e){
+        box.textContent = "Failed to load /profiles.";
+        setJson(out, e.data || { error: String(e) });
+      }
+    }
+
+    async function postTask(path){
+      const out = $("taskOut");
+      hide(out);
+      const taskId = String($("taskId")?.value || "").trim();
+      const body = { taskId };
+      try{
+        const data = await fetchJson(base + path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        setJson(out, data);
+      }catch(e){
+        setJson(out, e.data || { error: String(e) });
+      }
+    }
+
+    $("btnLoadConfig")?.addEventListener("click", onLoadConfig);
+    $("btnServerStatus")?.addEventListener("click", onServerStatus);
+    $("btnTaskStatus")?.addEventListener("click", () => postTask("/getTaskStatus"));
+    $("btnSummaryReady")?.addEventListener("click", () => postTask("/getTaskSummaryReady"));
+
+    loadStatus();
+    loadProfiles();
+  })();
+  </script>
+</body>
+</html>
