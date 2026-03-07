@@ -24637,13 +24637,16 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
     };
     const payload = {
         service_key: `${safeFsName(userId)}__${safeFsName(characterId)}`,
-        user: { user_id: userId, agent_id: characterId },
+        user: { user_id: userId, soul_id: characterId, agent_id: characterId },
         llm_profiles,
         memorize_config,
         retrieve_config,
     };
     if (conversation)
         payload.conversation = conversation;
+    if (typeof opts?.conversationId === 'string' && opts.conversationId.trim()) {
+        payload.conversationId = opts.conversationId.trim();
+    }
     // Minimal pointer (no filesystem probing): just store the expected SillyTavern chat file path.
     try {
         const chatFileName = String(opts?.chatFileName || '').trim();
@@ -25112,17 +25115,18 @@ function applyTimeZoneHints(payload, timeZone, timeZoneOffsetMin) {
 }
 async function proxyMemorizeConversation(req, res) {
     const userId = String(req.body?.userId || "");
-    // KISS: agent scope is the character name.
+    const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+    // KISS: soul scope is the character name.
     // If characterId is missing, fall back to characterName (and vice-versa).
-    const characterId = String(req.body?.agentId || req.body?.agentName || "");
-    const characterName = String(req.body?.agentName || req.body?.agentId || "");
+    const characterId = String(req.body?.soulId || req.body?.soulName || req.body?.agentId || req.body?.agentName || "");
+    const characterName = String(req.body?.soulName || req.body?.soulId || req.body?.agentName || req.body?.agentId || "");
     const chatFileName = String(req.body?.chatFileName || "");
     const conversation = req.body?.conversation;
     const timeZone = String(req.body?.timeZone || "").trim();
     const timeZoneOffsetMinRaw = req.body?.timeZoneOffsetMin;
     const timeZoneOffsetMin = Number.isFinite(Number(timeZoneOffsetMinRaw)) ? Number(timeZoneOffsetMinRaw) : undefined;
     if (!userId || !characterId || !Array.isArray(conversation)) {
-        res.status(400).json({ error: "Missing userId/characterId(character name)/conversation" });
+        res.status(400).json({ error: "Missing userId/soulId(character name)/conversation" });
         return;
     }
     pruneLocalTasks();
@@ -25134,7 +25138,12 @@ async function proxyMemorizeConversation(req, res) {
             setTask(taskId, { status: "PROCESSING" });
             const cfg = readPluginConfig();
             const srv = await ensureLocalServer(cfg);
-            const payload = buildMemuPayloadForLocal(cfg, userId, characterId, conversation, { characterName, chatFileName, includeCategoryPolicy: false });
+            const payload = buildMemuPayloadForLocal(cfg, userId, characterId, conversation, {
+                characterName,
+                chatFileName,
+                conversationId,
+                includeCategoryPolicy: false,
+            });
             applyTimeZoneHints(payload, timeZone, timeZoneOffsetMin);
             await httpJson(srv.baseUrl, '/memorize', 'POST', payload);
             setTask(taskId, { status: 'SUCCESS' });
@@ -25163,9 +25172,9 @@ async function proxyGetTaskSummaryReady(req, res) {
 }
 async function proxyRetrieveDefaultCategories(req, res) {
     const userId = String(req.body?.userId || "");
-    const characterId = String(req.body?.agentId || req.body?.agentName || "");
+    const characterId = String(req.body?.soulId || req.body?.soulName || req.body?.agentId || req.body?.agentName || "");
     if (!userId || !characterId) {
-        res.status(400).json({ error: "Missing userId/characterId(character name)" });
+        res.status(400).json({ error: "Missing userId/soulId(character name)" });
         return;
     }
     // Local mode: return a stable list of categories (defaults first), enriched with any stored summaries when available.
@@ -25200,7 +25209,7 @@ async function proxyRetrieveDefaultCategories(req, res) {
             const srv2 = srv || await ensureLocalServer(cfg);
             // POST /categories/search uses _get_service_from_payload() (API keys from ST profiles).
             const payload = payloadBase;
-            payload.user = { user_id: userId, agent_id: characterId };
+            payload.user = { user_id: userId, soul_id: characterId, agent_id: characterId };
             const resp = await httpJson(srv2.baseUrl, '/categories/search', 'POST', payload);
             storedCats = Array.isArray(resp?.categories) ? resp.categories : [];
         }
@@ -25256,9 +25265,9 @@ async function proxyRetrieveDefaultCategories(req, res) {
 }
 async function proxyScopeStorageProbe(req, res) {
     const userId = String(req.body?.userId || "");
-    const agentId = String(req.body?.agentId || req.body?.agentName || "");
-    if (!userId || !agentId) {
-        res.status(400).json({ error: "Missing userId/agentId(character name)" });
+    const soulId = String(req.body?.soulId || req.body?.soulName || req.body?.agentId || req.body?.agentName || "");
+    if (!userId || !soulId) {
+        res.status(400).json({ error: "Missing userId/soulId(character name)" });
         return;
     }
     try {
@@ -25273,7 +25282,8 @@ async function proxyScopeStorageProbe(req, res) {
             res.json({
                 ok: true,
                 userId,
-                agentId,
+                soulId,
+                agentId: soulId,
                 provider,
                 missing: false,
                 empty: false,
@@ -25286,7 +25296,8 @@ async function proxyScopeStorageProbe(req, res) {
             res.json({
                 ok: true,
                 userId,
-                agentId,
+                soulId,
+                agentId: soulId,
                 provider,
                 missing: false,
                 empty: false,
@@ -25300,20 +25311,22 @@ async function proxyScopeStorageProbe(req, res) {
             res.status(500).json({
                 ok: false,
                 userId,
-                agentId,
+                soulId,
+                agentId: soulId,
                 provider,
                 reason: "sqlite_dir_missing",
             });
             return;
         }
         const sqliteDir = path_1.default.resolve(_expandTilde(sqliteDirRaw));
-        const dbFile = `${sanitizeScopedDbFilename(agentId)}.db`;
+        const dbFile = `${sanitizeScopedDbFilename(soulId)}.db`;
         const dbPath = path_1.default.join(sqliteDir, dbFile);
         if (!fs_1.default.existsSync(dbPath)) {
             res.json({
                 ok: true,
                 userId,
-                agentId,
+                soulId,
+                agentId: soulId,
                 provider,
                 dbPath,
                 exists: false,
@@ -25337,7 +25350,8 @@ async function proxyScopeStorageProbe(req, res) {
             res.json({
                 ok: true,
                 userId,
-                agentId,
+                soulId,
+                agentId: soulId,
                 provider,
                 dbPath,
                 exists: true,
@@ -25352,13 +25366,15 @@ async function proxyScopeStorageProbe(req, res) {
         }
         const q = new URLSearchParams();
         q.set("user_id", userId);
-        q.set("agent_id", agentId);
+        q.set("soul_id", soulId);
+        q.set("agent_id", soulId);
         const counts = await httpJson(srv.baseUrl, `/diag/sqlite/counts?${q.toString()}`, "GET");
         if (!counts || counts.ok !== true || !counts.tables || typeof counts.tables !== "object") {
             res.json({
                 ok: true,
                 userId,
-                agentId,
+                soulId,
+                agentId: soulId,
                 provider,
                 dbPath,
                 exists: true,
@@ -25380,7 +25396,8 @@ async function proxyScopeStorageProbe(req, res) {
         res.json({
             ok: true,
             userId,
-            agentId,
+            soulId,
+            agentId: soulId,
             provider,
             dbPath,
             exists: true,
@@ -25396,7 +25413,8 @@ async function proxyScopeStorageProbe(req, res) {
         res.status(500).json({
             ok: false,
             userId,
-            agentId,
+            soulId,
+            agentId: soulId,
             reason: e?.message || String(e),
         });
     }

@@ -902,7 +902,7 @@ function buildMemuPayloadForLocal(
   userId: string,
   characterId: string,
   conversation?: any,
-  opts?: { characterName?: string; chatFileName?: string; includeCategoryPolicy?: boolean }
+  opts?: { characterName?: string; chatFileName?: string; conversationId?: string; includeCategoryPolicy?: boolean }
 ): any {
 
   const step = (s: MemuStep): string => cfg.stepProfileId?.[s] || cfg.defaultProfileId || "default";
@@ -996,13 +996,16 @@ function buildMemuPayloadForLocal(
 
   const payload: any = {
     service_key: `${safeFsName(userId)}__${safeFsName(characterId)}`,
-    user: { user_id: userId, agent_id: characterId },
+    user: { user_id: userId, soul_id: characterId, agent_id: characterId },
     llm_profiles,
     memorize_config,
     retrieve_config,
   };
 
   if (conversation) payload.conversation = conversation;
+  if (typeof opts?.conversationId === 'string' && opts.conversationId.trim()) {
+    payload.conversationId = opts.conversationId.trim();
+  }
 
   // Minimal pointer (no filesystem probing): just store the expected SillyTavern chat file path.
   try {
@@ -1473,10 +1476,11 @@ function applyTimeZoneHints(payload: any, timeZone: string, timeZoneOffsetMin: n
 
 export async function proxyMemorizeConversation(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
-  // KISS: agent scope is the character name.
+  const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+  // KISS: soul scope is the character name.
   // If characterId is missing, fall back to characterName (and vice-versa).
-  const characterId = String(req.body?.agentId || req.body?.agentName || "");
-  const characterName = String(req.body?.agentName || req.body?.agentId || "");
+  const characterId = String(req.body?.soulId || req.body?.soulName || req.body?.agentId || req.body?.agentName || "");
+  const characterName = String(req.body?.soulName || req.body?.soulId || req.body?.agentName || req.body?.agentId || "");
   const chatFileName = String(req.body?.chatFileName || "");
   const conversation = req.body?.conversation;
   const timeZone = String(req.body?.timeZone || "").trim();
@@ -1484,7 +1488,7 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
   const timeZoneOffsetMin = Number.isFinite(Number(timeZoneOffsetMinRaw)) ? Number(timeZoneOffsetMinRaw) : undefined;
 
   if (!userId || !characterId || !Array.isArray(conversation)) {
-    res.status(400).json({ error: "Missing userId/characterId(character name)/conversation" });
+    res.status(400).json({ error: "Missing userId/soulId(character name)/conversation" });
     return;
   }
 
@@ -1499,7 +1503,12 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
       setTask(taskId, { status: "PROCESSING" });
       const cfg = readPluginConfig();
         const srv = await ensureLocalServer(cfg);
-        const payload = buildMemuPayloadForLocal(cfg, userId, characterId, conversation, { characterName, chatFileName, includeCategoryPolicy: false });
+        const payload = buildMemuPayloadForLocal(cfg, userId, characterId, conversation, {
+          characterName,
+          chatFileName,
+          conversationId,
+          includeCategoryPolicy: false,
+        });
         applyTimeZoneHints(payload as any, timeZone, timeZoneOffsetMin);
         await httpJson(srv.baseUrl, '/memorize', 'POST', payload);
         setTask(taskId, { status: 'SUCCESS' });
@@ -1531,9 +1540,9 @@ export async function proxyGetTaskSummaryReady(req: Request, res: Response): Pro
 
 export async function proxyRetrieveDefaultCategories(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
-  const characterId = String(req.body?.agentId || req.body?.agentName || "");
+  const characterId = String(req.body?.soulId || req.body?.soulName || req.body?.agentId || req.body?.agentName || "");
   if (!userId || !characterId) {
-    res.status(400).json({ error: "Missing userId/characterId(character name)" });
+    res.status(400).json({ error: "Missing userId/soulId(character name)" });
     return;
   }
 
@@ -1569,7 +1578,7 @@ export async function proxyRetrieveDefaultCategories(req: Request, res: Response
       const srv2 = srv || await ensureLocalServer(cfg);
       // POST /categories/search uses _get_service_from_payload() (API keys from ST profiles).
       const payload = payloadBase;
-      payload.user = { user_id: userId, agent_id: characterId };
+      payload.user = { user_id: userId, soul_id: characterId, agent_id: characterId };
       const resp: any = await httpJson(srv2.baseUrl, '/categories/search', 'POST', payload);
       storedCats = Array.isArray(resp?.categories) ? resp.categories : [];
     } catch (e: any) {
@@ -1625,9 +1634,9 @@ export async function proxyRetrieveDefaultCategories(req: Request, res: Response
 
 export async function proxyScopeStorageProbe(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
-  const agentId = String(req.body?.agentId || req.body?.agentName || "");
-  if (!userId || !agentId) {
-    res.status(400).json({ error: "Missing userId/agentId(character name)" });
+  const soulId = String(req.body?.soulId || req.body?.soulName || req.body?.agentId || req.body?.agentName || "");
+  if (!userId || !soulId) {
+    res.status(400).json({ error: "Missing userId/soulId(character name)" });
     return;
   }
 
@@ -1645,7 +1654,8 @@ export async function proxyScopeStorageProbe(req: Request, res: Response): Promi
       res.json({
         ok: true,
         userId,
-        agentId,
+        soulId,
+        agentId: soulId,
         provider,
         missing: false,
         empty: false,
@@ -1659,7 +1669,8 @@ export async function proxyScopeStorageProbe(req: Request, res: Response): Promi
       res.json({
         ok: true,
         userId,
-        agentId,
+        soulId,
+        agentId: soulId,
         provider,
         missing: false,
         empty: false,
@@ -1674,7 +1685,8 @@ export async function proxyScopeStorageProbe(req: Request, res: Response): Promi
       res.status(500).json({
         ok: false,
         userId,
-        agentId,
+        soulId,
+        agentId: soulId,
         provider,
         reason: "sqlite_dir_missing",
       });
@@ -1682,13 +1694,14 @@ export async function proxyScopeStorageProbe(req: Request, res: Response): Promi
     }
 
     const sqliteDir = path.resolve(_expandTilde(sqliteDirRaw));
-    const dbFile = `${sanitizeScopedDbFilename(agentId)}.db`;
+    const dbFile = `${sanitizeScopedDbFilename(soulId)}.db`;
     const dbPath = path.join(sqliteDir, dbFile);
     if (!fs.existsSync(dbPath)) {
       res.json({
         ok: true,
         userId,
-        agentId,
+        soulId,
+        agentId: soulId,
         provider,
         dbPath,
         exists: false,
@@ -1712,7 +1725,8 @@ export async function proxyScopeStorageProbe(req: Request, res: Response): Promi
       res.json({
         ok: true,
         userId,
-        agentId,
+        soulId,
+        agentId: soulId,
         provider,
         dbPath,
         exists: true,
@@ -1728,14 +1742,16 @@ export async function proxyScopeStorageProbe(req: Request, res: Response): Promi
 
     const q = new URLSearchParams();
     q.set("user_id", userId);
-    q.set("agent_id", agentId);
+    q.set("soul_id", soulId);
+    q.set("agent_id", soulId);
     const counts: any = await httpJson(srv.baseUrl, `/diag/sqlite/counts?${q.toString()}`, "GET");
 
     if (!counts || counts.ok !== true || !counts.tables || typeof counts.tables !== "object") {
       res.json({
         ok: true,
         userId,
-        agentId,
+        soulId,
+        agentId: soulId,
         provider,
         dbPath,
         exists: true,
@@ -1758,7 +1774,8 @@ export async function proxyScopeStorageProbe(req: Request, res: Response): Promi
     res.json({
       ok: true,
       userId,
-      agentId,
+      soulId,
+      agentId: soulId,
       provider,
       dbPath,
       exists: true,
@@ -1773,7 +1790,8 @@ export async function proxyScopeStorageProbe(req: Request, res: Response): Promi
     res.status(500).json({
       ok: false,
       userId,
-      agentId,
+      soulId,
+      agentId: soulId,
       reason: e?.message || String(e),
     });
   }
