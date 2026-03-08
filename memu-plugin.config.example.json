@@ -1,0 +1,16 @@
+{
+  "version": 4,
+  "defaultProfileId": "default",
+  "stepProfileId": {
+    "preprocess": "default",
+    "memory_extract": "default",
+    "category_update": "default",
+    "reflection": "default",
+    "ranking": "default",
+    "embeddings": "default"
+  },
+  "serverPath": "/path/to/mcp-memu-server",
+  "autoStartServer": true,
+  "embeddingModel": "text-embedding-3-small",
+  "updatedAt": "2026-03-07T00:00:00.000Z"
+}

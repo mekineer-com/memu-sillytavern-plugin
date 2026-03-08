@@ -58,6 +58,15 @@ This plugin stores its settings in a file named `memu-plugin.config.json` in you
 
 - The file is **auto-created** the first time the plugin runs.
 - The MemU browser extension normally updates it by calling `GET/POST /api/plugins/memu/config`.
+- A shipped example file lives at `plugins/memu-plugin/memu-plugin.config.example.json`.
+
+Copy the example into your SillyTavern root like this:
+
+```bash
+cp plugins/memu-plugin/memu-plugin.config.example.json ./memu-plugin.config.json
+```
+
+That destination is the folder that contains `config.yaml`, `server.js`, `plugins/`, and `data/`.
 
 ### Local mode: how the plugin runs
 
@@ -70,6 +79,7 @@ In **local mode**, the plugin talks to an external HTTP service: `mcp-memu-serve
   3. fallback `http://127.0.0.1:8099`
 - If `autoStartServer` is enabled and `<serverPath>/run.py` exists, the plugin can start the server automatically.
 - The plugin chooses Python from `mcp-memu-server` config/venv when available, else falls back to `python3`.
+- In the example file, each `stepProfileId` key is optional. If you remove one, that step falls back to `defaultProfileId`.
 
 `memU` is still required, but it is loaded by `mcp-memu-server` (not by a plugin-local helper process).
 
