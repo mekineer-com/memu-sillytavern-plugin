@@ -777,98 +777,7 @@ function sanitizeScopedDbFilename(v: string): string {
   return s.slice(0, 80);
 }
 
-const DEFAULT_MEMORY_CATEGORIES = [
-  {
-    name: 'assistant_state',
-    description: 'Facts about the assistant: identity/persona, continuity, memory gaps, long-term goals, and any stable traits that should persist across chats.',
-  },
-  {
-    name: 'personal_info',
-    description: "Stable facts about the user (name, background, recurring preferences that don't fit elsewhere).",
-  },
-  {
-    name: 'preferences',
-    description: 'User likes/dislikes, UI/style preferences, and stable choices the assistant should remember.',
-  },
-  {
-    name: 'relationships',
-    description: 'Important relationships between the user and others (including the assistant), and how they relate.',
-  },
-  {
-    name: 'activities',
-    description: 'Regular activities, hobbies, and routines.',
-  },
-  {
-    name: 'goals',
-    description: 'Short and long term goals and plans.',
-  },
-  {
-    name: 'experiences',
-    description: 'Notable past events and experiences worth remembering.',
-  },
-  {
-    name: 'knowledge',
-    description: 'Domain knowledge the user has, projects, or factual context the assistant should reuse.',
-  },
-  {
-    name: 'opinions',
-    description: 'Opinions or stances that are stable and useful for future conversation.',
-  },
-  {
-    name: 'habits',
-    description: 'Habits (sleep, work patterns, recurring behaviors) that affect interaction.',
-  },
-  {
-    name: 'work_life',
-    description: 'Work setup, tools, and constraints (e.g., OS, hardware, environment).',
-  },
-];
-
 let _loggedDefaultCategories = false;
-
-
-type ServerCategoryPolicy = { categories: any[]; allowDynamic: boolean; maxTotal: number };
-
-function readServerCategoryPolicy(cfg: MemuPluginConfig): ServerCategoryPolicy | null {
-  try {
-    const serverPath = String((cfg as any).serverPath || '').trim();
-    if (!serverPath) return null;
-    const configPath = path.join(serverPath, 'config.json');
-    if (!fs.existsSync(configPath)) return null;
-    const raw = fs.readFileSync(configPath, 'utf-8');
-    const j = raw.trim() ? JSON.parse(raw) : {};
-
-    const catsCfg = (j && typeof j === 'object' && (j as any).categories && typeof (j as any).categories === 'object') ? (j as any).categories : {};
-    const defaults = Array.isArray(catsCfg.defaults) ? catsCfg.defaults : (Array.isArray((j as any).category_defaults) ? (j as any).category_defaults : []);
-
-    const out: any[] = [];
-    const seen = new Set<string>();
-    for (const c of defaults) {
-      let name = '';
-      let description = '';
-      if (typeof c === 'string') {
-        name = c.trim();
-      } else if (c && typeof c === 'object') {
-        name = String((c as any).name || '').trim();
-        description = String((c as any).description || '').trim();
-      }
-      if (!name) continue;
-      const key = name.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ name, description });
-    }
-
-    const allowDynamic = Boolean(catsCfg.allow_dynamic ?? (j as any).allow_dynamic ?? true);
-    const maxTotalRaw = catsCfg.max_total ?? (j as any).max_total ?? 12;
-    const maxTotal = Number.isFinite(Number(maxTotalRaw)) ? Number(maxTotalRaw) : 12;
-
-    return { categories: out, allowDynamic, maxTotal };
-  } catch (e: any) {
-    console.error(chalk.red(MODULE_NAME), 'Failed to read server category policy from config.json:', e?.message || String(e));
-    return null;
-  }
-}
 
 function mapSTProviderToMemU(provider: string): { provider: string; client_backend: string; provider_hint?: string } {
   const p = String(provider || '').trim().toLowerCase();
@@ -972,30 +881,18 @@ function buildMemuPayloadForLocal(
     llm_profiles["embedding"] = { ...llm_profiles["default"], embed_model: (cfg as any).embeddingModel || (llm_profiles["default"] as any).embed_model || "text-embedding-3-small" };
   }
 
-  const includeCats = opts?.includeCategoryPolicy !== false;
-
   const memorize_config: any = {
     preprocess_llm_profile: idToName(step("preprocess")),
     memory_extract_llm_profile: idToName(step("memory_extract")),
     category_update_llm_profile: idToName(step("category_update")),
   };
 
-  if (includeCats) {
-    const catPolicy = readServerCategoryPolicy(cfg);
-    const memory_categories = (catPolicy && catPolicy.categories && catPolicy.categories.length) ? catPolicy.categories : DEFAULT_MEMORY_CATEGORIES;
-    memorize_config.memory_categories = memory_categories;
-    memorize_config.allow_dynamic_categories = catPolicy ? catPolicy.allowDynamic : true;
-    memorize_config.max_categories_total = catPolicy ? catPolicy.maxTotal : 12;
-  }
-
   const retrieve_config: any = {
-    method: "rag",
     sufficiency_check_llm_profile: idToName(step("reflection")),
     llm_ranking_llm_profile: idToName(step("ranking")),
   };
 
   const payload: any = {
-    service_key: `${safeFsName(userId)}__${safeFsName(characterId)}`,
     user: { user_id: userId, soul_id: characterId },
     llm_profiles,
     memorize_config,
@@ -1565,90 +1462,41 @@ export async function proxyRetrieveDefaultCategories(req: Request, res: Response
     return;
   }
 
-
-  // Local mode: return a stable list of categories (defaults first), enriched with any stored summaries when available.
-  // This keeps UI predictable (defaults always present) while letting the extension show "real" memU memories.
   const cfg = readPluginConfig();
   let srv: any = null;
-  let defaults: any[] = DEFAULT_MEMORY_CATEGORIES;
-  let allowDynamic = true;
-  let maxTotal = 12;
 
   const payloadBase = buildMemuPayloadForLocal(cfg, userId, characterId, undefined, { includeCategoryPolicy: false });
 
-  {
-    try {
-      srv = await ensureLocalServer(cfg);
-      const dc: any = await httpJson(srv.baseUrl, '/default-categories', 'GET');
-      const cats = Array.isArray(dc?.categories) ? dc.categories : (Array.isArray(dc?.defaults) ? dc.defaults : []);
-      if (Array.isArray(cats) && cats.length) defaults = cats;
-      if (dc && typeof dc === 'object') {
-        if (dc.allow_dynamic !== undefined) allowDynamic = Boolean(dc.allow_dynamic);
-        if (dc.max_total !== undefined && Number.isFinite(Number(dc.max_total))) maxTotal = Number(dc.max_total);
-      }
-    } catch (e: any) {
-      console.error(chalk.red(MODULE_NAME), 'retrieveDefaultCategories: failed to load server defaults; using built-in defaults:', e?.message || String(e));
-    }
-  }
-
   let storedCats: any[] = [];
-  if (true) {
-    try {
-      const srv2 = srv || await ensureLocalServer(cfg);
-      // POST /categories/search uses _get_service_from_payload() (API keys from ST profiles).
-      const payload = payloadBase;
-      payload.user = { user_id: userId, soul_id: characterId };
-      const resp: any = await httpJson(srv2.baseUrl, '/categories/search', 'POST', payload);
-      storedCats = Array.isArray(resp?.categories) ? resp.categories : [];
-    } catch (e: any) {
-      console.error(chalk.red(MODULE_NAME), 'retrieveDefaultCategories: failed to load stored categories; using defaults only:', e?.message || String(e));
-    }
-  }
-
-  const byName = new Map<string, any>();
-  for (const c of storedCats) {
-    const nm = String(c?.name || '').trim();
-    if (!nm) continue;
-    byName.set(nm.toLowerCase(), c);
+  try {
+    srv = await ensureLocalServer(cfg);
+    // POST /categories/search uses _get_service_from_payload() (API keys from ST profiles).
+    const payload = payloadBase;
+    payload.user = { user_id: userId, soul_id: characterId };
+    const resp: any = await httpJson(srv.baseUrl, '/categories/search', 'POST', payload);
+    storedCats = Array.isArray(resp?.categories) ? resp.categories : [];
+  } catch (e: any) {
+    console.error(chalk.red(MODULE_NAME), 'retrieveDefaultCategories: failed to load stored categories:', e?.message || String(e));
   }
 
   const out: any[] = [];
   const seen = new Set<string>();
-
-  // Defaults first (always present)
-  for (const d of defaults) {
-    const nm = String((d as any)?.name || '').trim();
-    if (!nm) continue;
+  for (const c of storedCats) {
+    const nm = String(c?.name || '').trim();
+    const summary = String(c?.summary || '').trim();
+    if (!nm || !summary) continue;
     const key = nm.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    const hit = byName.get(key);
-    out.push({
-      name: nm,
-      description: String((d as any)?.description || ''),
-      summary: String(hit?.summary || ''),
-    });
-  }
-
-  // Then dynamic categories (AI-created) if allowed
-  if (allowDynamic) {
-    for (const c of storedCats) {
-      const nm = String(c?.name || '').trim();
-      if (!nm) continue;
-      const key = nm.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ ...c, name: nm, summary: String(c?.summary || '') });
-      if (out.length >= maxTotal) break;
-    }
+    out.push({ ...c, name: nm, summary });
   }
 
   if (!_loggedDefaultCategories) {
-    console.log(chalk.gray(MODULE_NAME), 'retrieveDefaultCategories: defaults=', defaults.length, 'stored=', storedCats.length, 'backend=server');
+    console.log(chalk.gray(MODULE_NAME), 'retrieveDefaultCategories: stored=', out.length, 'backend=server');
     _loggedDefaultCategories = true;
   }
 
-  res.json({ categories: out.slice(0, Math.max(1, maxTotal)) });
+  res.json({ categories: out });
 }
 
 export async function proxyScopeStorageProbe(req: Request, res: Response): Promise<void> {
