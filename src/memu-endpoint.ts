@@ -1397,6 +1397,8 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
   // If characterId is missing, fall back to characterName (and vice-versa).
   const characterId = String(req.body?.soulId || req.body?.soulName || "");
   const characterName = String(req.body?.soulName || req.body?.soulId || "");
+  const userName = String(req.body?.userName || "").trim();
+  const soulName = String(req.body?.soulName || characterName || characterId || "").trim();
   const chatFileName = String(req.body?.chatFileName || "");
   const conversation = req.body?.conversation;
   const timeZone = String(req.body?.timeZone || "").trim();
@@ -1418,16 +1420,22 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
     try {
       setTask(taskId, { status: "PROCESSING" });
       const cfg = readPluginConfig();
-        const srv = await ensureLocalServer(cfg);
-        const payload = buildMemuPayloadForLocal(cfg, userId, characterId, conversation, {
-          characterName,
-          chatFileName,
-          conversationId,
-          includeCategoryPolicy: false,
-        });
-        applyTimeZoneHints(payload as any, timeZone, timeZoneOffsetMin);
-        await httpJson(srv.baseUrl, '/memorize', 'POST', payload);
-        setTask(taskId, { status: 'SUCCESS' });
+      const namedConversation = conversation.map((msg: any) => {
+        if (!msg || typeof msg !== "object") return msg;
+        if (msg.role === "user" && userName) return { ...msg, name: userName };
+        if (msg.role === "assistant" && soulName) return { ...msg, name: soulName };
+        return msg;
+      });
+      const srv = await ensureLocalServer(cfg);
+      const payload = buildMemuPayloadForLocal(cfg, userId, characterId, namedConversation, {
+        characterName,
+        chatFileName,
+        conversationId,
+        includeCategoryPolicy: false,
+      });
+      applyTimeZoneHints(payload as any, timeZone, timeZoneOffsetMin);
+      await httpJson(srv.baseUrl, '/memorize', 'POST', payload);
+      setTask(taskId, { status: 'SUCCESS' });
     } catch (e: any) {
       setTask(taskId, { status: "FAILURE", error: e?.message || String(e) });
     }
