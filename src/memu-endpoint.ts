@@ -1499,6 +1499,56 @@ export async function proxyRetrieveDefaultCategories(req: Request, res: Response
   res.json({ categories: out });
 }
 
+export async function proxyConversationRetrieve(req: Request, res: Response): Promise<void> {
+  const userId = String(req.body?.userId || "");
+  const soulId = String(req.body?.soulId || req.body?.soulName || "");
+  const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+  const method = String(req.body?.method || "").trim().toLowerCase();
+  const query = String(req.body?.query || "");
+  const queries = Array.isArray(req.body?.queries) ? req.body.queries : undefined;
+
+  if (!userId || !soulId || !conversationId) {
+    res.status(400).json({ error: "Missing userId/soulId(character name)/conversationId" });
+    return;
+  }
+  if (method !== "rag" && method !== "llm") {
+    res.status(400).json({ error: "Invalid method (expected rag or llm)" });
+    return;
+  }
+  if (!query.trim() && (!queries || queries.length === 0)) {
+    res.status(400).json({ error: "Missing query or queries" });
+    return;
+  }
+
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, {
+      conversationId,
+      includeCategoryPolicy: false,
+    });
+
+    payload.user = { user_id: userId, soul_id: soulId };
+    payload.conversationId = conversationId;
+    payload.conversation_id = conversationId;
+    payload.method = method;
+    payload.query = query;
+    if (queries && queries.length > 0) {
+      payload.queries = queries;
+    }
+
+    const resp = await httpJson(
+      srv.baseUrl,
+      `/conversation/${encodeURIComponent(conversationId)}/retrieve`,
+      "POST",
+      payload,
+    );
+    res.json(resp);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+}
+
 export async function proxyScopeStorageProbe(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
   const soulId = String(req.body?.soulId || req.body?.soulName || "");
@@ -1684,6 +1734,10 @@ export function registerGetTaskSummaryReady(router: Router): void {
 
 export function registerRetrieveDefaultCategories(router: Router): void {
   router.post("/retrieveDefaultCategories", proxyRetrieveDefaultCategories);
+}
+
+export function registerConversationRetrieve(router: Router): void {
+  router.post("/conversationRetrieve", proxyConversationRetrieve);
 }
 
 export function registerScopeStorageProbe(router: Router): void {

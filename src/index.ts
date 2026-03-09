@@ -9,6 +9,7 @@ import {
   registerGetTaskStatus,
   registerGetTaskSummaryReady,
   registerMemorizeConversation,
+  registerConversationRetrieve,
   registerRetrieveDefaultCategories,
   registerScopeStorageProbe,
   registerLocalHealth,
@@ -100,6 +101,7 @@ export async function init(router: Router): Promise<void> {
   registerGetTaskStatus(router);
   registerGetTaskSummaryReady(router);
   registerRetrieveDefaultCategories(router);
+  registerConversationRetrieve(router);
   registerScopeStorageProbe(router);
   registerMemorizeConversation(router);
   registerLocalHealth(router);

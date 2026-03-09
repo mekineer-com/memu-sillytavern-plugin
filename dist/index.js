@@ -23678,6 +23678,7 @@ async function init(router) {
     (0, memu_endpoint_1.registerGetTaskStatus)(router);
     (0, memu_endpoint_1.registerGetTaskSummaryReady)(router);
     (0, memu_endpoint_1.registerRetrieveDefaultCategories)(router);
+    (0, memu_endpoint_1.registerConversationRetrieve)(router);
     (0, memu_endpoint_1.registerScopeStorageProbe)(router);
     (0, memu_endpoint_1.registerMemorizeConversation)(router);
     (0, memu_endpoint_1.registerLocalHealth)(router);
@@ -23728,12 +23729,14 @@ exports.proxyMemorizeConversation = proxyMemorizeConversation;
 exports.proxyGetTaskStatus = proxyGetTaskStatus;
 exports.proxyGetTaskSummaryReady = proxyGetTaskSummaryReady;
 exports.proxyRetrieveDefaultCategories = proxyRetrieveDefaultCategories;
+exports.proxyConversationRetrieve = proxyConversationRetrieve;
 exports.proxyScopeStorageProbe = proxyScopeStorageProbe;
 exports.proxyLocalHealth = proxyLocalHealth;
 exports.registerMemorizeConversation = registerMemorizeConversation;
 exports.registerGetTaskStatus = registerGetTaskStatus;
 exports.registerGetTaskSummaryReady = registerGetTaskSummaryReady;
 exports.registerRetrieveDefaultCategories = registerRetrieveDefaultCategories;
+exports.registerConversationRetrieve = registerConversationRetrieve;
 exports.registerScopeStorageProbe = registerScopeStorageProbe;
 exports.registerLocalHealth = registerLocalHealth;
 const chalk_1 = __importDefault(__webpack_require__(/*! chalk */ "./node_modules/chalk/source/index.js"));
@@ -25133,6 +25136,47 @@ async function proxyRetrieveDefaultCategories(req, res) {
     }
     res.json({ categories: out });
 }
+async function proxyConversationRetrieve(req, res) {
+    const userId = String(req.body?.userId || "");
+    const soulId = String(req.body?.soulId || req.body?.soulName || "");
+    const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+    const method = String(req.body?.method || "").trim().toLowerCase();
+    const query = String(req.body?.query || "");
+    const queries = Array.isArray(req.body?.queries) ? req.body.queries : undefined;
+    if (!userId || !soulId || !conversationId) {
+        res.status(400).json({ error: "Missing userId/soulId(character name)/conversationId" });
+        return;
+    }
+    if (method !== "rag" && method !== "llm") {
+        res.status(400).json({ error: "Invalid method (expected rag or llm)" });
+        return;
+    }
+    if (!query.trim() && (!queries || queries.length === 0)) {
+        res.status(400).json({ error: "Missing query or queries" });
+        return;
+    }
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, {
+            conversationId,
+            includeCategoryPolicy: false,
+        });
+        payload.user = { user_id: userId, soul_id: soulId };
+        payload.conversationId = conversationId;
+        payload.conversation_id = conversationId;
+        payload.method = method;
+        payload.query = query;
+        if (queries && queries.length > 0) {
+            payload.queries = queries;
+        }
+        const resp = await httpJson(srv.baseUrl, `/conversation/${encodeURIComponent(conversationId)}/retrieve`, "POST", payload);
+        res.json(resp);
+    }
+    catch (e) {
+        res.status(500).json({ error: e?.message || String(e) });
+    }
+}
 async function proxyScopeStorageProbe(req, res) {
     const userId = String(req.body?.userId || "");
     const soulId = String(req.body?.soulId || req.body?.soulName || "");
@@ -25305,6 +25349,9 @@ function registerGetTaskSummaryReady(router) {
 }
 function registerRetrieveDefaultCategories(router) {
     router.post("/retrieveDefaultCategories", proxyRetrieveDefaultCategories);
+}
+function registerConversationRetrieve(router) {
+    router.post("/conversationRetrieve", proxyConversationRetrieve);
 }
 function registerScopeStorageProbe(router) {
     router.post("/scopeStorageProbe", proxyScopeStorageProbe);
