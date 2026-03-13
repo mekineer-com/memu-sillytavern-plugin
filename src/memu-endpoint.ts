@@ -165,16 +165,10 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
   (cfg as any).embeddingModel = effective || undefined;
   // External server settings (local mode): only serverPath is user-configurable.
   const serverPathRaw = String((cfg as any).serverPath || '').trim();
-  const legacyCmdRaw = String((cfg as any).serverCommand || '').trim();
   const home2 = String(process.env.HOME || process.env.USERPROFILE || '').trim();
   const defaultPath = home2 ? path.join(home2, 'apps', 'mcp-memu-server') : '';
-  (cfg as any).serverPath = (serverPathRaw || (legacyCmdRaw ? path.dirname(legacyCmdRaw) : defaultPath) || '').trim() || undefined;
+  (cfg as any).serverPath = (serverPathRaw || defaultPath || '').trim() || undefined;
   (cfg as any).autoStartServer = ((cfg as any).autoStartServer !== false);
-
-  // URL/command are derived internally; strip any stale values from old configs.
-  delete (cfg as any).serverUrl;
-  delete (cfg as any).serverCommand;
-  delete (cfg as any).mcpPath;
 
   cfg.updatedAt = new Date().toISOString();
   return cfg;

@@ -23872,15 +23872,10 @@ function sanitizeIncomingConfig(obj) {
     cfg.embeddingModel = effective || undefined;
     // External server settings (local mode): only serverPath is user-configurable.
     const serverPathRaw = String(cfg.serverPath || '').trim();
-    const legacyCmdRaw = String(cfg.serverCommand || '').trim();
     const home2 = String(process.env.HOME || process.env.USERPROFILE || '').trim();
     const defaultPath = home2 ? path_1.default.join(home2, 'apps', 'mcp-memu-server') : '';
-    cfg.serverPath = (serverPathRaw || (legacyCmdRaw ? path_1.default.dirname(legacyCmdRaw) : defaultPath) || '').trim() || undefined;
+    cfg.serverPath = (serverPathRaw || defaultPath || '').trim() || undefined;
     cfg.autoStartServer = (cfg.autoStartServer !== false);
-    // URL/command are derived internally; strip any stale values from old configs.
-    delete cfg.serverUrl;
-    delete cfg.serverCommand;
-    delete cfg.mcpPath;
     cfg.updatedAt = new Date().toISOString();
     return cfg;
 }
