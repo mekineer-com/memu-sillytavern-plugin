@@ -25044,6 +25044,8 @@ async function proxyMemorizeConversation(req, res) {
     const soulName = String(req.body?.soulName || characterName || characterId || "").trim();
     const chatFileName = String(req.body?.chatFileName || "");
     const conversation = req.body?.conversation;
+    const forceRaw = req.query?.force ?? req.body?.force;
+    const force = forceRaw === true || String(forceRaw || "").trim().toLowerCase() === "true";
     const timeZone = String(req.body?.timeZone || "").trim();
     const timeZoneOffsetMinRaw = req.body?.timeZoneOffsetMin;
     const timeZoneOffsetMin = Number.isFinite(Number(timeZoneOffsetMinRaw)) ? Number(timeZoneOffsetMinRaw) : undefined;
@@ -25076,7 +25078,7 @@ async function proxyMemorizeConversation(req, res) {
                 includeCategoryPolicy: false,
             });
             applyTimeZoneHints(payload, timeZone, timeZoneOffsetMin);
-            await httpJson(srv.baseUrl, '/memorize', 'POST', payload);
+            await httpJson(srv.baseUrl, force ? '/memorize?force=true' : '/memorize', 'POST', payload);
             setTask(taskId, { status: 'SUCCESS' });
         }
         catch (e) {
