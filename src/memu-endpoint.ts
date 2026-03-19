@@ -1002,15 +1002,19 @@ function getExternalServerPython(cfg: MemuPluginConfig): string {
 function _getExternalLogFile(cfg: MemuPluginConfig): string | null {
   const root = String((cfg as any).serverPath || '').trim();
   if (!root) return null;
+  const rootAbs = path.resolve(root);
 
   const c = _readExternalServerConfig(root);
   const logRaw = c && typeof (c as any).log_file === 'string' ? String((c as any).log_file).trim() : '';
   if (logRaw) {
     const expanded = _expandTilde(logRaw);
-    return path.isAbsolute(expanded) ? expanded : path.join(root, expanded);
+    if (path.isAbsolute(expanded)) return expanded;
+    const candidate = path.resolve(root, expanded);
+    if (candidate.startsWith(rootAbs + path.sep) || candidate === rootAbs) return candidate;
+    return path.join(rootAbs, 'mcp-memu-server.log');
   }
 
-  return path.join(root, 'mcp-memu-server.log');
+  return path.join(rootAbs, 'mcp-memu-server.log');
 }
 
 function _readLogTail(logPath: string | null, maxLines: number): string[] {

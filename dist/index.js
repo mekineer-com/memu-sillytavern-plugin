@@ -24650,13 +24650,19 @@ function _getExternalLogFile(cfg) {
     const root = String(cfg.serverPath || '').trim();
     if (!root)
         return null;
+    const rootAbs = path_1.default.resolve(root);
     const c = _readExternalServerConfig(root);
     const logRaw = c && typeof c.log_file === 'string' ? String(c.log_file).trim() : '';
     if (logRaw) {
         const expanded = _expandTilde(logRaw);
-        return path_1.default.isAbsolute(expanded) ? expanded : path_1.default.join(root, expanded);
+        if (path_1.default.isAbsolute(expanded))
+            return expanded;
+        const candidate = path_1.default.resolve(root, expanded);
+        if (candidate.startsWith(rootAbs + path_1.default.sep) || candidate === rootAbs)
+            return candidate;
+        return path_1.default.join(rootAbs, 'mcp-memu-server.log');
     }
-    return path_1.default.join(root, 'mcp-memu-server.log');
+    return path_1.default.join(rootAbs, 'mcp-memu-server.log');
 }
 function _readLogTail(logPath, maxLines) {
     try {
