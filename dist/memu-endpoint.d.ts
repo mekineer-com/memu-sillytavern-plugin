@@ -19,7 +19,13 @@ export declare function getConnectionProfilesSummary(): {
     profiles: Array<{
         id: string;
         name: string;
+        provider?: string;
+        memuChatCapable?: boolean;
+        memuEmbeddingListCapable?: boolean;
+        selected?: boolean;
+        resolvedProfileId?: string;
     }>;
+    selectedProfileId?: string | null;
     message?: string;
 };
 type ModelsKind = 'embedding' | 'chat' | 'all';

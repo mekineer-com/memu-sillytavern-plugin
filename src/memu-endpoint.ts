@@ -523,9 +523,40 @@ function pickKeyForProvider(provider: string, secrets: AnyObject | null, secretI
 }
 
 // Exported for meta endpoints (/profiles, /models)
-export function getConnectionProfilesSummary(): { ok: boolean; profiles: Array<{ id: string; name: string }>; message?: string } {
+export function getConnectionProfilesSummary(): {
+  ok: boolean;
+  profiles: Array<{
+    id: string;
+    name: string;
+    provider?: string;
+    memuChatCapable?: boolean;
+    memuEmbeddingListCapable?: boolean;
+    selected?: boolean;
+    resolvedProfileId?: string;
+  }>;
+  selectedProfileId?: string | null;
+  message?: string;
+} {
   const profiles = loadAllProfilesFromSettings();
-  const merged: Array<{ id: string; name: string }> = [];
+  const merged: Array<{
+    id: string;
+    name: string;
+    provider?: string;
+    memuChatCapable?: boolean;
+    memuEmbeddingListCapable?: boolean;
+    selected?: boolean;
+    resolvedProfileId?: string;
+  }> = [];
+  const selectedByUserDir = new Set<string>();
+  for (const d of listSTUserDirs()) {
+    const sid = findSelectedProfileIdForUserDir(d, profiles);
+    if (sid) selectedByUserDir.add(String(sid));
+  }
+  const selectedProfileId = selectedByUserDir.size ? Array.from(selectedByUserDir)[0] : null;
+  const openaiLike = new Set([
+    'openai', 'openai-compatible', 'openai_compatible', 'openrouter', 'nanogpt', 'groq', 'together', 'togetherai',
+    'mistral', 'deepseek', 'xai', 'perplexity', 'custom', 'vllm', 'lmstudio', 'ollama',
+  ]);
 
   for (const p of profiles) {
     try {
@@ -534,6 +565,8 @@ export function getConnectionProfilesSummary(): { ok: boolean; profiles: Array<{
       const key = n.tokenInline || (secrets ? pickKeyForProvider(n.provider, secrets, n.secretId) : null);
       const hasSignal = Boolean((n.baseUrl && n.baseUrl.trim()) || (n.model && n.model.trim()) || (key && String(key).trim()));
       if (!hasSignal) continue;
+      const chatCapable = Boolean((n.baseUrl && n.baseUrl.trim()) && (n.model && n.model.trim()) && (key && String(key).trim()));
+      const embListCapable = Boolean((n.baseUrl && n.baseUrl.trim()) && (key && String(key).trim()) && (openaiLike.has(String(n.provider || '').toLowerCase()) || /nano-gpt\.com/i.test(String(n.baseUrl || ''))));
 
       const id = String((p as any).id || '').trim();
       let name = String((p as any).name || (p as any).label || (p as any).title || '').trim();
@@ -548,15 +581,35 @@ export function getConnectionProfilesSummary(): { ok: boolean; profiles: Array<{
       }
       if (!name) name = id;
       if (!id || !name) continue;
-      if (!merged.some((x) => x.id === id)) merged.push({ id, name });
+      if (!merged.some((x) => x.id === id)) merged.push({
+        id,
+        name,
+        provider: String(n.provider || '').trim() || undefined,
+        memuChatCapable: chatCapable,
+        memuEmbeddingListCapable: embListCapable,
+        selected: selectedByUserDir.has(id),
+      });
     } catch {
       // ignore bad entries
     }
   }
 
-  const withAliases = [{ id: 'default', name: 'default (SillyTavern selected)' }, ...merged].filter((p, i, arr) => arr.findIndex((x) => x.id === p.id) === i);
-  if (merged.length) return { ok: true, profiles: withAliases };
-  return { ok: false, profiles: withAliases, message: 'No usable connection profiles found (need base_url/model/key in any data/*/settings.json).' };
+  const selectedSummary = selectedProfileId ? merged.find((x) => x.id === selectedProfileId) : undefined;
+  const defaultAlias = {
+    id: 'default',
+    name: selectedSummary?.provider
+      ? `default (SillyTavern selected: ${selectedSummary.provider})`
+      : 'default (SillyTavern selected)',
+    provider: selectedSummary?.provider,
+    memuChatCapable: selectedSummary?.memuChatCapable,
+    memuEmbeddingListCapable: selectedSummary?.memuEmbeddingListCapable,
+    selected: true,
+    resolvedProfileId: selectedSummary?.id,
+  };
+
+  const withAliases = [defaultAlias, ...merged].filter((p, i, arr) => arr.findIndex((x) => x.id === p.id) === i);
+  if (merged.length) return { ok: true, profiles: withAliases, selectedProfileId };
+  return { ok: false, profiles: withAliases, selectedProfileId, message: 'No usable connection profiles found (need base_url/model/key in any data/*/settings.json).' };
 }
 
 function _stripTrailingSlash(s: string): string {
@@ -809,32 +862,50 @@ function buildMemuPayloadForLocal(
 ): any {
 
   const step = (s: MemuStep): string => cfg.stepProfileId?.[s] || cfg.defaultProfileId || "default";
+  const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "ranking", "embeddings"];
+  const labelsById = new Map<string, string[]>();
+  for (const s of steps) {
+    const id = step(s);
+    const labels = labelsById.get(id) || [];
+    labels.push(s);
+    labelsById.set(id, labels);
+  }
+  const resolveRequired = (id: string): NonNullable<ReturnType<typeof resolveProfileCredentials>> => {
+    const cred = resolveProfileCredentials(id);
+    if (cred && cred.ok) return cred;
+    const where = labelsById.get(id);
+    const usedBy = where && where.length ? `steps=${where.join(",")}` : "step=unknown";
+    const reason = cred?.message || `profile '${id}' not found`;
+    throw new Error(`Model Mapping invalid (${usedBy}, profile='${id}'): ${reason}`);
+  };
 
   // Build unique set of needed profile ids (default + step overrides)
   const needIds = new Set<string>();
-  needIds.add(step("preprocess"));
-  needIds.add(step("memory_extract"));
-  needIds.add(step("category_update"));
-  needIds.add(step("reflection"));
-  needIds.add(step("ranking"));
-  needIds.add(step("embeddings"));
+  for (const s of steps) needIds.add(step(s));
 
   const idToName = (id: string) => (id === "default" ? "default" : `st_${safeFsName(id)}`);
 
   const llm_profiles: Record<string, any> = {};
 
-  // Always provide "default"
-  const defCred = resolveProfileCredentials(cfg.defaultProfileId || "default");
-  if (defCred && defCred.ok) {
-    const mapped = mapSTProviderToMemU(defCred.provider);
+  // Provide "default" only when needed by step mapping.
+  const defId = cfg.defaultProfileId || "default";
+  const defaultReferencedBySteps = labelsById.has(defId);
+  let defCred: NonNullable<ReturnType<typeof resolveProfileCredentials>> | null = null;
+  if (defaultReferencedBySteps) {
+    defCred = resolveRequired(defId);
+  } else {
+    const maybeDef = resolveProfileCredentials(defId);
+    if (maybeDef && maybeDef.ok) defCred = maybeDef;
+  }
+  if (defCred) {
+    const defMapped = mapSTProviderToMemU(defCred.provider);
     llm_profiles["default"] = {
-      provider: mapped.provider,
+      provider: defMapped.provider,
       base_url: defCred.baseUrl,
       api_key: defCred.key,
       chat_model: defCred.model,
-      client_backend: mapped.client_backend,
-      ...(mapped.provider_hint ? { provider_hint: mapped.provider_hint } : {}),
-      // embed_model left as memU default unless embeddings profile overrides it
+      client_backend: defMapped.client_backend,
+      ...(defMapped.provider_hint ? { provider_hint: defMapped.provider_hint } : {}),
     };
   }
 
@@ -842,37 +913,37 @@ function buildMemuPayloadForLocal(
   for (const id of needIds) {
     const name = idToName(id);
     if (llm_profiles[name]) continue;
-
-    const cred = resolveProfileCredentials(id);
-    if (cred && cred.ok) {
-      const mapped = mapSTProviderToMemU(cred.provider);
-      llm_profiles[name] = {
-        provider: mapped.provider,
-        base_url: cred.baseUrl,
-        api_key: cred.key,
-        chat_model: cred.model,
-        client_backend: mapped.client_backend,
-        ...(mapped.provider_hint ? { provider_hint: mapped.provider_hint } : {}),
-      };
-    }
+    const cred = resolveRequired(id);
+    const mapped = mapSTProviderToMemU(cred.provider);
+    llm_profiles[name] = {
+      provider: mapped.provider,
+      base_url: cred.baseUrl,
+      api_key: cred.key,
+      chat_model: cred.model,
+      client_backend: mapped.client_backend,
+      ...(mapped.provider_hint ? { provider_hint: mapped.provider_hint } : {}),
+    };
   }
 
   // Embeddings: memU pipelines default to embed_llm_profile="embedding" in many steps.
   const embedId = step("embeddings");
-  const embedCred = resolveProfileCredentials(embedId) || defCred;
-  if (embedCred && embedCred.ok) {
-    const mapped = mapSTProviderToMemU(embedCred.provider);
-    llm_profiles["embedding"] = {
-      provider: mapped.provider,
-      base_url: embedCred.baseUrl,
-      api_key: embedCred.key,
-      chat_model: embedCred.model,
-      client_backend: mapped.client_backend,
-      embed_model: (cfg as any).embeddingModel || "text-embedding-3-small",
-      ...(mapped.provider_hint ? { provider_hint: mapped.provider_hint } : {}),
-    };
-  } else if (llm_profiles["default"]) {
-    llm_profiles["embedding"] = { ...llm_profiles["default"], embed_model: (cfg as any).embeddingModel || (llm_profiles["default"] as any).embed_model || "text-embedding-3-small" };
+  const embedCred = resolveRequired(embedId);
+  const embedMapped = mapSTProviderToMemU(embedCred.provider);
+  llm_profiles["embedding"] = {
+    provider: embedMapped.provider,
+    base_url: embedCred.baseUrl,
+    api_key: embedCred.key,
+    chat_model: embedCred.model,
+    client_backend: embedMapped.client_backend,
+    embed_model: (cfg as any).embeddingModel || "text-embedding-3-small",
+    ...(embedMapped.provider_hint ? { provider_hint: embedMapped.provider_hint } : {}),
+  };
+
+  // Keep a usable "default" profile even when global default is not referenced by steps.
+  // This avoids failing on integrations that expect a default key to exist.
+  if (!llm_profiles["default"]) {
+    const fallback = llm_profiles[idToName(step("preprocess"))] || llm_profiles["embedding"];
+    if (fallback) llm_profiles["default"] = { ...fallback };
   }
 
   const memorize_config: any = {
