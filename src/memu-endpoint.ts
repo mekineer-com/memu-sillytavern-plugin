@@ -1557,6 +1557,54 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
   }
 }
 
+export async function proxyConversationTurn(req: Request, res: Response): Promise<void> {
+  const userId = String(req.body?.userId || "");
+  const soulId = String(req.body?.soulId || req.body?.soulName || "");
+  const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+  const message = String(req.body?.message || req.body?.query || req.body?.text || "");
+  const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
+  const runApimw = req.body?.runApimw ?? req.body?.run_apimw;
+  const waitApimw = req.body?.waitApimw ?? req.body?.wait_apimw;
+  const debug = req.body?.debug;
+
+  if (!userId || !soulId || !conversationId) {
+    res.status(400).json({ error: "Missing userId/soulId(character name)/conversationId" });
+    return;
+  }
+  if (!message.trim()) {
+    res.status(400).json({ error: "Missing message" });
+    return;
+  }
+
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, {
+      conversationId,
+      includeCategoryPolicy: false,
+    });
+
+    payload.user = { user_id: userId, soul_id: soulId };
+    payload.conversationId = conversationId;
+    payload.conversation_id = conversationId;
+    payload.message = message;
+    if (history && history.length > 0) payload.history = history;
+    if (runApimw !== undefined) payload.run_apimw = !!runApimw;
+    if (waitApimw !== undefined) payload.wait_apimw = !!waitApimw;
+    if (debug !== undefined) payload.debug = !!debug;
+
+    const resp = await httpJson(
+      srv.baseUrl,
+      `/conversation/${encodeURIComponent(conversationId)}/turn`,
+      "POST",
+      payload,
+    );
+    res.json(resp);
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+}
+
 export async function proxyScopeStorageProbe(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
   const soulId = String(req.body?.soulId || req.body?.soulName || "");
@@ -1746,6 +1794,10 @@ export function registerRetrieveDefaultCategories(router: Router): void {
 
 export function registerConversationRetrieve(router: Router): void {
   router.post("/conversationRetrieve", proxyConversationRetrieve);
+}
+
+export function registerConversationTurn(router: Router): void {
+  router.post("/conversationTurn", proxyConversationTurn);
 }
 
 export function registerScopeStorageProbe(router: Router): void {

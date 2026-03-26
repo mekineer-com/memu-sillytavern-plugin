@@ -23679,6 +23679,7 @@ async function init(router) {
     (0, memu_endpoint_1.registerGetTaskSummaryReady)(router);
     (0, memu_endpoint_1.registerRetrieveDefaultCategories)(router);
     (0, memu_endpoint_1.registerConversationRetrieve)(router);
+    (0, memu_endpoint_1.registerConversationTurn)(router);
     (0, memu_endpoint_1.registerScopeStorageProbe)(router);
     (0, memu_endpoint_1.registerMemorizeConversation)(router);
     (0, memu_endpoint_1.registerLocalHealth)(router);
@@ -23730,6 +23731,7 @@ exports.proxyGetTaskStatus = proxyGetTaskStatus;
 exports.proxyGetTaskSummaryReady = proxyGetTaskSummaryReady;
 exports.proxyRetrieveDefaultCategories = proxyRetrieveDefaultCategories;
 exports.proxyConversationRetrieve = proxyConversationRetrieve;
+exports.proxyConversationTurn = proxyConversationTurn;
 exports.proxyScopeStorageProbe = proxyScopeStorageProbe;
 exports.proxyLocalHealth = proxyLocalHealth;
 exports.registerMemorizeConversation = registerMemorizeConversation;
@@ -23737,6 +23739,7 @@ exports.registerGetTaskStatus = registerGetTaskStatus;
 exports.registerGetTaskSummaryReady = registerGetTaskSummaryReady;
 exports.registerRetrieveDefaultCategories = registerRetrieveDefaultCategories;
 exports.registerConversationRetrieve = registerConversationRetrieve;
+exports.registerConversationTurn = registerConversationTurn;
 exports.registerScopeStorageProbe = registerScopeStorageProbe;
 exports.registerLocalHealth = registerLocalHealth;
 const chalk_1 = __importDefault(__webpack_require__(/*! chalk */ "./node_modules/chalk/source/index.js"));
@@ -25191,6 +25194,49 @@ async function proxyConversationRetrieve(req, res) {
         res.status(500).json({ error: e?.message || String(e) });
     }
 }
+async function proxyConversationTurn(req, res) {
+    const userId = String(req.body?.userId || "");
+    const soulId = String(req.body?.soulId || req.body?.soulName || "");
+    const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+    const message = String(req.body?.message || req.body?.query || req.body?.text || "");
+    const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
+    const runApimw = req.body?.runApimw ?? req.body?.run_apimw;
+    const waitApimw = req.body?.waitApimw ?? req.body?.wait_apimw;
+    const debug = req.body?.debug;
+    if (!userId || !soulId || !conversationId) {
+        res.status(400).json({ error: "Missing userId/soulId(character name)/conversationId" });
+        return;
+    }
+    if (!message.trim()) {
+        res.status(400).json({ error: "Missing message" });
+        return;
+    }
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, {
+            conversationId,
+            includeCategoryPolicy: false,
+        });
+        payload.user = { user_id: userId, soul_id: soulId };
+        payload.conversationId = conversationId;
+        payload.conversation_id = conversationId;
+        payload.message = message;
+        if (history && history.length > 0)
+            payload.history = history;
+        if (runApimw !== undefined)
+            payload.run_apimw = !!runApimw;
+        if (waitApimw !== undefined)
+            payload.wait_apimw = !!waitApimw;
+        if (debug !== undefined)
+            payload.debug = !!debug;
+        const resp = await httpJson(srv.baseUrl, `/conversation/${encodeURIComponent(conversationId)}/turn`, "POST", payload);
+        res.json(resp);
+    }
+    catch (e) {
+        res.status(500).json({ error: e?.message || String(e) });
+    }
+}
 async function proxyScopeStorageProbe(req, res) {
     const userId = String(req.body?.userId || "");
     const soulId = String(req.body?.soulId || req.body?.soulName || "");
@@ -25366,6 +25412,9 @@ function registerRetrieveDefaultCategories(router) {
 }
 function registerConversationRetrieve(router) {
     router.post("/conversationRetrieve", proxyConversationRetrieve);
+}
+function registerConversationTurn(router) {
+    router.post("/conversationTurn", proxyConversationTurn);
 }
 function registerScopeStorageProbe(router) {
     router.post("/scopeStorageProbe", proxyScopeStorageProbe);
