@@ -1569,6 +1569,7 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
   const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
   const runApimw = req.body?.runApimw ?? req.body?.run_apimw;
   const waitApimw = req.body?.waitApimw ?? req.body?.wait_apimw;
+  const dryRun = req.body?.dryRun ?? req.body?.dry_run;
   const debug = req.body?.debug;
 
   if (!userId || !soulId || !conversationId) {
@@ -1595,6 +1596,7 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
     if (history && history.length > 0) payload.history = history;
     if (runApimw !== undefined) payload.run_apimw = !!runApimw;
     if (waitApimw !== undefined) payload.wait_apimw = !!waitApimw;
+    if (dryRun !== undefined) payload.dry_run = !!dryRun;
     if (debug !== undefined) payload.debug = !!debug;
 
     const resp = await httpJson(
