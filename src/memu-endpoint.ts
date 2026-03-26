@@ -1117,14 +1117,18 @@ async function isServerHealthy(baseUrl: string): Promise<boolean> {
   }
 }
 
-async function ensureLocalServer(cfg: MemuPluginConfig): Promise<{ baseUrl: string; host: string; port: number }> {
+async function ensureLocalServer(
+  cfg: MemuPluginConfig,
+  opts: { forceStart?: boolean } = {},
+): Promise<{ baseUrl: string; host: string; port: number }> {
   // External server (mcp-memu-server). No Python probing required here.
   const baseUrl = getExternalServerBaseUrl(cfg);
   const autoStartServer = cfg.autoStartServer !== false;
+  const shouldStartIfDown = autoStartServer || opts.forceStart === true;
   const okNow = await isServerHealthy(baseUrl);
 
   if (!okNow) {
-    if (autoStartServer) {
+    if (shouldStartIfDown) {
       // Start-on-demand: if server isn't healthy, try to spawn it (no shell) and then wait briefly.
       const runPy = getExternalServerRunPy(cfg);
       if (runPy && fs.existsSync(runPy)) {
@@ -1138,7 +1142,7 @@ async function ensureLocalServer(cfg: MemuPluginConfig): Promise<{ baseUrl: stri
       await waitForServerHealthy(baseUrl);
     }
     if (!(await isServerHealthy(baseUrl))) {
-      if (autoStartServer) {
+      if (shouldStartIfDown) {
         throw new Error("mcp-memu-server did not become healthy");
       }
       throw new Error("mcp-memu-server is not healthy (autoStartServer=false)");
@@ -1256,7 +1260,7 @@ export async function externalServerPingInfo(): Promise<{ ok: boolean; serverIns
 export async function externalServerStart(): Promise<{ ok: boolean; message?: string; status?: any }> {
   try {
     const cfg = readPluginConfig();
-    await ensureLocalServer(cfg);
+    await ensureLocalServer(cfg, { forceStart: true });
     return { ok: true, status: await externalServerStatus() };
   } catch (e: any) {
     const msg = e?.message ? String(e.message) : String(e);
