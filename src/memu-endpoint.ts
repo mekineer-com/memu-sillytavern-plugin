@@ -337,7 +337,7 @@ function _deepFindSelectedId(node: any, ids: Set<string>, depth: number = 0): st
 
   for (const [k, v] of Object.entries(node as any)) {
     const key = String(k || '').toLowerCase();
-    const looksSelected = key.includes('selected') || key.includes('active') || key.includes('current') || key.includes('default');
+    const looksSelected = key.includes('selected') || key.includes('active') || key.includes('current');
     if (!looksSelected) continue;
 
     if (typeof v === 'string' && ids.has(v)) return v;
@@ -354,17 +354,43 @@ function _deepFindSelectedId(node: any, ids: Set<string>, depth: number = 0): st
   return null;
 }
 
+function expectedProfileModeFromSettings(settings: AnyObject | null): 'cc' | 'tc' | null {
+  const mainApi = String((settings as any)?.main_api || '').trim().toLowerCase();
+  if (!mainApi) return null;
+  if (mainApi === 'openai') return 'cc';
+  return 'tc';
+}
+
 function findSelectedProfileIdForUserDir(userDir: string, profiles: AnyObject[]): string | null {
   try {
     const settings = readJsonCached(path.join(userDir, 'settings.json'));
     if (!settings) return null;
-    const ids = new Set(profiles.filter((p) => (p as any).__st_user_dir === userDir).map((p) => String((p as any).id)));
+    const userProfiles = profiles.filter((p) => (p as any).__st_user_dir === userDir);
+    const ids = new Set(userProfiles.map((p) => String((p as any).id)));
     if (!ids.size) return null;
+    const byId = new Map(userProfiles.map((p) => [String((p as any).id), p]));
+    const expectedMode = expectedProfileModeFromSettings(settings as AnyObject);
+    const matchesMode = (id: string): boolean => {
+      if (!expectedMode) return true;
+      const prof = byId.get(String(id));
+      const mode = String((prof as any)?.mode || '').trim().toLowerCase();
+      return mode === expectedMode;
+    };
 
     const cmSel = (settings as any)?.extension_settings?.connectionManager?.selectedProfile;
+    if (typeof cmSel === 'string' && ids.has(cmSel) && matchesMode(cmSel)) return cmSel;
+
+    const deepSel = _deepFindSelectedId(settings, ids, 0);
+    if (deepSel && matchesMode(deepSel)) return deepSel;
+
+    if (expectedMode) {
+      const modeCandidates = userProfiles.filter((p) => String((p as any)?.mode || '').trim().toLowerCase() === expectedMode);
+      if (modeCandidates.length) return String((modeCandidates[0] as any).id || '');
+    }
+
     if (typeof cmSel === 'string' && ids.has(cmSel)) return cmSel;
 
-    return _deepFindSelectedId(settings, ids, 0);
+    return deepSel || null;
   } catch (e: any) {
     warnOnce('selectedProfile', "selectedProfile: failed to read settings.json");
     return null;
@@ -1618,6 +1644,12 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     payload.query = query;
     if (queries && queries.length > 0) {
       payload.queries = queries;
+    }
+    if (Array.isArray(req.body?.history)) {
+      payload.history = req.body.history;
+    }
+    if (req.body?.buildTurnPrompt || req.body?.build_turn_prompt) {
+      payload.build_turn_prompt = true;
     }
 
     const resp = await httpJson(
