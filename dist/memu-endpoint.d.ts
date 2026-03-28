@@ -82,6 +82,7 @@ export declare function proxyGetTaskSummaryReady(req: Request, res: Response): P
 export declare function proxyRetrieveDefaultCategories(req: Request, res: Response): Promise<void>;
 export declare function proxyConversationRetrieve(req: Request, res: Response): Promise<void>;
 export declare function proxyConversationTurn(req: Request, res: Response): Promise<void>;
+export declare function proxyConversationTurnUndo(req: Request, res: Response): Promise<void>;
 export declare function proxyScopeStorageProbe(req: Request, res: Response): Promise<void>;
 export declare function proxyLocalHealth(_req: Request, res: Response): Promise<void>;
 export declare function registerMemorizeConversation(router: Router): void;
@@ -90,6 +91,9 @@ export declare function registerGetTaskSummaryReady(router: Router): void;
 export declare function registerRetrieveDefaultCategories(router: Router): void;
 export declare function registerConversationRetrieve(router: Router): void;
 export declare function registerConversationTurn(router: Router): void;
+export declare function registerConversationTurnUndo(router: Router): void;
+export declare function proxyConversationCacheClear(req: Request, res: Response): Promise<void>;
+export declare function registerConversationCacheClear(router: Router): void;
 export declare function registerScopeStorageProbe(router: Router): void;
 export declare function registerLocalHealth(router: Router): void;
 export {};

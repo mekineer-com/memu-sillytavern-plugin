@@ -23680,6 +23680,8 @@ async function init(router) {
     (0, memu_endpoint_1.registerRetrieveDefaultCategories)(router);
     (0, memu_endpoint_1.registerConversationRetrieve)(router);
     (0, memu_endpoint_1.registerConversationTurn)(router);
+    (0, memu_endpoint_1.registerConversationTurnUndo)(router);
+    (0, memu_endpoint_1.registerConversationCacheClear)(router);
     (0, memu_endpoint_1.registerScopeStorageProbe)(router);
     (0, memu_endpoint_1.registerMemorizeConversation)(router);
     (0, memu_endpoint_1.registerLocalHealth)(router);
@@ -23732,6 +23734,7 @@ exports.proxyGetTaskSummaryReady = proxyGetTaskSummaryReady;
 exports.proxyRetrieveDefaultCategories = proxyRetrieveDefaultCategories;
 exports.proxyConversationRetrieve = proxyConversationRetrieve;
 exports.proxyConversationTurn = proxyConversationTurn;
+exports.proxyConversationTurnUndo = proxyConversationTurnUndo;
 exports.proxyScopeStorageProbe = proxyScopeStorageProbe;
 exports.proxyLocalHealth = proxyLocalHealth;
 exports.registerMemorizeConversation = registerMemorizeConversation;
@@ -23740,6 +23743,9 @@ exports.registerGetTaskSummaryReady = registerGetTaskSummaryReady;
 exports.registerRetrieveDefaultCategories = registerRetrieveDefaultCategories;
 exports.registerConversationRetrieve = registerConversationRetrieve;
 exports.registerConversationTurn = registerConversationTurn;
+exports.registerConversationTurnUndo = registerConversationTurnUndo;
+exports.proxyConversationCacheClear = proxyConversationCacheClear;
+exports.registerConversationCacheClear = registerConversationCacheClear;
 exports.registerScopeStorageProbe = registerScopeStorageProbe;
 exports.registerLocalHealth = registerLocalHealth;
 const chalk_1 = __importDefault(__webpack_require__(/*! chalk */ "./node_modules/chalk/source/index.js"));
@@ -25166,7 +25172,6 @@ async function proxyMemorizeConversation(req, res) {
                 characterName,
                 chatFileName,
                 conversationId,
-                includeCategoryPolicy: false,
             });
             applyTimeZoneHints(payload, timeZone, timeZoneOffsetMin);
             await httpJson(srv.baseUrl, force ? '/memorize?force=true' : '/memorize', 'POST', payload);
@@ -25203,7 +25208,7 @@ async function proxyRetrieveDefaultCategories(req, res) {
     }
     const cfg = readPluginConfig();
     let srv = null;
-    const payloadBase = buildMemuPayloadForLocal(cfg, userId, characterId, undefined, { includeCategoryPolicy: false });
+    const payloadBase = buildMemuPayloadForLocal(cfg, userId, characterId, undefined);
     let storedCats = [];
     try {
         srv = await ensureLocalServer(cfg);
@@ -25259,11 +25264,8 @@ async function proxyConversationRetrieve(req, res) {
         const srv = await ensureLocalServer(cfg);
         const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, {
             conversationId,
-            includeCategoryPolicy: false,
         });
         payload.user = { user_id: userId, soul_id: soulId };
-        payload.conversationId = conversationId;
-        payload.conversation_id = conversationId;
         payload.method = method;
         payload.query = query;
         if (queries && queries.length > 0) {
@@ -25308,11 +25310,8 @@ async function proxyConversationTurn(req, res) {
         const srv = await ensureLocalServer(cfg);
         const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, {
             conversationId,
-            includeCategoryPolicy: false,
         });
         payload.user = { user_id: userId, soul_id: soulId };
-        payload.conversationId = conversationId;
-        payload.conversation_id = conversationId;
         payload.message = message;
         if (history && history.length > 0)
             payload.history = history;
@@ -25328,6 +25327,26 @@ async function proxyConversationTurn(req, res) {
             payload.soul_card = req.body.soul_card;
         }
         const resp = await httpJson(srv.baseUrl, `/conversation/${encodeURIComponent(conversationId)}/turn`, "POST", payload);
+        res.json(resp);
+    }
+    catch (e) {
+        res.status(500).json({ error: e?.message || String(e) });
+    }
+}
+async function proxyConversationTurnUndo(req, res) {
+    const userId = String(req.body?.userId || "");
+    const soulId = String(req.body?.soulId || req.body?.soulName || "");
+    const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+    if (!userId || !soulId || !conversationId) {
+        res.status(400).json({ error: "Missing userId/soulId/conversationId" });
+        return;
+    }
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, { conversationId });
+        payload.user = { user_id: userId, soul_id: soulId };
+        const resp = await httpJson(srv.baseUrl, `/conversation/${encodeURIComponent(conversationId)}/turn/undo`, "POST", payload);
         res.json(resp);
     }
     catch (e) {
@@ -25512,6 +25531,32 @@ function registerConversationRetrieve(router) {
 }
 function registerConversationTurn(router) {
     router.post("/conversationTurn", proxyConversationTurn);
+}
+function registerConversationTurnUndo(router) {
+    router.post("/conversationTurnUndo", proxyConversationTurnUndo);
+}
+async function proxyConversationCacheClear(req, res) {
+    const userId = String(req.body?.userId || "");
+    const soulId = String(req.body?.soulId || req.body?.soulName || "");
+    const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+    if (!userId || !soulId || !conversationId) {
+        res.status(400).json({ error: "Missing userId/soulId/conversationId" });
+        return;
+    }
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, { conversationId });
+        payload.user = { user_id: userId, soul_id: soulId };
+        const resp = await httpJson(srv.baseUrl, `/conversation/${encodeURIComponent(conversationId)}/cache/clear`, "POST", payload);
+        res.json(resp);
+    }
+    catch (e) {
+        res.status(500).json({ error: e?.message || String(e) });
+    }
+}
+function registerConversationCacheClear(router) {
+    router.post("/conversationCacheClear", proxyConversationCacheClear);
 }
 function registerScopeStorageProbe(router) {
     router.post("/scopeStorageProbe", proxyScopeStorageProbe);
