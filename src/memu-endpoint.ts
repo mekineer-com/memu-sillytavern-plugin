@@ -1650,6 +1650,9 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     if (req.body?.buildTurnPrompt || req.body?.build_turn_prompt) {
       payload.build_turn_prompt = true;
     }
+    if (req.body?.soul_card) {
+      payload.soul_card = req.body.soul_card;
+    }
 
     const resp = await httpJson(
       srv.baseUrl,
@@ -1700,6 +1703,9 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
     if (waitApimw !== undefined) payload.wait_apimw = !!waitApimw;
     if (dryRun !== undefined) payload.dry_run = !!dryRun;
     if (debug !== undefined) payload.debug = !!debug;
+    if (req.body?.soul_card) {
+      payload.soul_card = req.body.soul_card;
+    }
 
     const resp = await httpJson(
       srv.baseUrl,
