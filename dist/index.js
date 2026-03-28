@@ -23904,10 +23904,9 @@ function setPluginConfig(obj) {
         fs_1.default.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
     }
     catch (e) {
-        // non-fatal
         console.warn(chalk_1.default.yellow(consts_1.MODULE_NAME), 'Failed to write config:', e);
     }
-    _cachedPluginConfig = null;
+    _cachedPluginConfig = { cfg, at: Date.now() };
     return cfg;
 }
 let _profilesCache = null;

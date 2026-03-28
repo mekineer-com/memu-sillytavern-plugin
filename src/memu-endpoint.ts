@@ -198,10 +198,9 @@ export function setPluginConfig(obj: any): MemuPluginConfig {
   try {
     fs.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
   } catch (e) {
-    // non-fatal
     console.warn(chalk.yellow(MODULE_NAME), 'Failed to write config:', e);
   }
-  _cachedPluginConfig = null;
+  _cachedPluginConfig = { cfg, at: Date.now() };
   return cfg;
 }
 
