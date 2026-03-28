@@ -883,7 +883,7 @@ function buildMemuPayloadForLocal(
   userId: string,
   characterId: string,
   conversation?: any,
-  opts?: { characterName?: string; chatFileName?: string; conversationId?: string; includeCategoryPolicy?: boolean }
+  opts?: { characterName?: string; chatFileName?: string; conversationId?: string }
 ): any {
 
   const step = (s: MemuStep): string => cfg.stepProfileId?.[s] || cfg.defaultProfileId || "default";
@@ -1531,7 +1531,6 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
         characterName,
         chatFileName,
         conversationId,
-        includeCategoryPolicy: false,
       });
       applyTimeZoneHints(payload as any, timeZone, timeZoneOffsetMin);
       await httpJson(srv.baseUrl, force ? '/memorize?force=true' : '/memorize', 'POST', payload);
@@ -1573,7 +1572,7 @@ export async function proxyRetrieveDefaultCategories(req: Request, res: Response
   const cfg = readPluginConfig();
   let srv: any = null;
 
-  const payloadBase = buildMemuPayloadForLocal(cfg, userId, characterId, undefined, { includeCategoryPolicy: false });
+  const payloadBase = buildMemuPayloadForLocal(cfg, userId, characterId, undefined);
 
   let storedCats: any[] = [];
   try {
@@ -1633,12 +1632,9 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     const srv = await ensureLocalServer(cfg);
     const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, {
       conversationId,
-      includeCategoryPolicy: false,
     });
 
     payload.user = { user_id: userId, soul_id: soulId };
-    payload.conversationId = conversationId;
-    payload.conversation_id = conversationId;
     payload.method = method;
     payload.query = query;
     if (queries && queries.length > 0) {
@@ -1691,12 +1687,9 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
     const srv = await ensureLocalServer(cfg);
     const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, {
       conversationId,
-      includeCategoryPolicy: false,
     });
 
     payload.user = { user_id: userId, soul_id: soulId };
-    payload.conversationId = conversationId;
-    payload.conversation_id = conversationId;
     payload.message = message;
     if (history && history.length > 0) payload.history = history;
     if (runApimw !== undefined) payload.run_apimw = !!runApimw;
