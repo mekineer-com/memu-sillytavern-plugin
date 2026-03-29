@@ -1672,6 +1672,8 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
   const waitApimw = req.body?.waitApimw ?? req.body?.wait_apimw;
   const dryRun = req.body?.dryRun ?? req.body?.dry_run;
   const debug = req.body?.debug;
+  const promptOverride = req.body?.promptOverride ?? req.body?.prompt_override;
+  const promptOverridePayload = req.body?.promptOverridePayload ?? req.body?.prompt_override_payload;
 
   if (!userId || !soulId || !conversationId) {
     res.status(400).json({ error: "Missing userId/soulId(character name)/conversationId" });
@@ -1698,6 +1700,12 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
     if (debug !== undefined) payload.debug = !!debug;
     if (req.body?.soul_card) {
       payload.soul_card = req.body.soul_card;
+    }
+    if (promptOverride !== undefined) {
+      payload.prompt_override = String(promptOverride);
+    }
+    if (promptOverridePayload !== undefined) {
+      payload.prompt_override_payload = promptOverridePayload;
     }
 
     const resp = await httpJson(
