@@ -25295,6 +25295,7 @@ async function proxyConversationTurn(req, res) {
     const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
     const runApimw = req.body?.runApimw ?? req.body?.run_apimw;
     const waitApimw = req.body?.waitApimw ?? req.body?.wait_apimw;
+    const applyTurnMaintenance = req.body?.applyTurnMaintenance ?? req.body?.apply_turn_maintenance;
     const dryRun = req.body?.dryRun ?? req.body?.dry_run;
     const debug = req.body?.debug;
     const promptOverride = req.body?.promptOverride ?? req.body?.prompt_override;
@@ -25321,6 +25322,8 @@ async function proxyConversationTurn(req, res) {
             payload.run_apimw = !!runApimw;
         if (waitApimw !== undefined)
             payload.wait_apimw = !!waitApimw;
+        if (applyTurnMaintenance !== undefined)
+            payload.apply_turn_maintenance = !!applyTurnMaintenance;
         if (dryRun !== undefined)
             payload.dry_run = !!dryRun;
         if (debug !== undefined)
