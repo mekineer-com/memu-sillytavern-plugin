@@ -967,7 +967,7 @@ function buildMemuPayloadForLocal(
 
   if (conversation) payload.conversation = conversation;
   if (typeof opts?.conversationId === 'string' && opts.conversationId.trim()) {
-    payload.conversationId = opts.conversationId.trim();
+    payload.conversation_id = opts.conversationId.trim();
   }
 
   // Minimal pointer (no filesystem probing): just store the expected SillyTavern chat file path.
@@ -1456,8 +1456,8 @@ function setTask(taskId: string, patch: Partial<{ status: LocalTaskStatus; updat
 }
 
 function applyTimeZoneHints(payload: any, timeZone: string, timeZoneOffsetMin: number | undefined): void {
-  if (timeZone) payload.timeZone = timeZone;
-  if (timeZoneOffsetMin !== undefined) payload.timeZoneOffsetMin = timeZoneOffsetMin;
+  if (timeZone) payload.time_zone = timeZone;
+  if (timeZoneOffsetMin !== undefined) payload.time_zone_offset_min = timeZoneOffsetMin;
 }
 
 export async function proxyMemorizeConversation(req: Request, res: Response): Promise<void> {
