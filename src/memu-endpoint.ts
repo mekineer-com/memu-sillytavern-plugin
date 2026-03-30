@@ -150,8 +150,7 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
   // Normalize/derive embedding model fields (dropdown overrides manual).
   const selected = typeof (cfg as any).embeddingModelSelected === "string" ? String((cfg as any).embeddingModelSelected).trim() : "";
   const manual = typeof (cfg as any).embeddingModelManual === "string" ? String((cfg as any).embeddingModelManual).trim() : "";
-  const legacy = typeof (cfg as any).embeddingModel === "string" ? String((cfg as any).embeddingModel).trim() : "";
-  const effective = selected || manual || legacy;
+  const effective = selected || manual;
   (cfg as any).embeddingModelSelected = selected || undefined;
   (cfg as any).embeddingModelManual = manual || undefined;
   (cfg as any).embeddingModel = effective || undefined;

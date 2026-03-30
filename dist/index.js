@@ -23861,8 +23861,7 @@ function sanitizeIncomingConfig(obj) {
     // Normalize/derive embedding model fields (dropdown overrides manual).
     const selected = typeof cfg.embeddingModelSelected === "string" ? String(cfg.embeddingModelSelected).trim() : "";
     const manual = typeof cfg.embeddingModelManual === "string" ? String(cfg.embeddingModelManual).trim() : "";
-    const legacy = typeof cfg.embeddingModel === "string" ? String(cfg.embeddingModel).trim() : "";
-    const effective = selected || manual || legacy;
+    const effective = selected || manual;
     cfg.embeddingModelSelected = selected || undefined;
     cfg.embeddingModelManual = manual || undefined;
     cfg.embeddingModel = effective || undefined;
