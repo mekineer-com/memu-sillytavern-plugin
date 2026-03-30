@@ -1915,34 +1915,6 @@ export function registerConversationTurnUndo(router: Router): void {
   router.post("/conversationTurnUndo", proxyConversationTurnUndo);
 }
 
-export async function proxyConversationCacheClear(req: Request, res: Response): Promise<void> {
-  const userId = String(req.body?.userId || "");
-  const soulId = String(req.body?.soulId || req.body?.soulName || "");
-  const conversationId = String(req.body?.conversationId || "");
-  if (!userId || !soulId || !conversationId) {
-    res.status(400).json({ error: "Missing userId/soulId/conversationId" });
-    return;
-  }
-  try {
-    const cfg = readPluginConfig();
-    const srv = await ensureLocalServer(cfg);
-    const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, { conversationId });
-    payload.user = { user_id: userId, soul_id: soulId };
-    const resp = await httpJson(
-      srv.baseUrl,
-      `/conversation/${encodeURIComponent(conversationId)}/cache/clear`,
-      "POST",
-      payload,
-    );
-    res.json(resp);
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message || String(e) });
-  }
-}
-
-export function registerConversationCacheClear(router: Router): void {
-  router.post("/conversationCacheClear", proxyConversationCacheClear);
-}
 
 export function registerScopeStorageProbe(router: Router): void {
   router.post("/scopeStorageProbe", proxyScopeStorageProbe);
