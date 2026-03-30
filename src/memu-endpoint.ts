@@ -948,13 +948,6 @@ function buildMemuPayloadForLocal(
     ...(embedMapped.provider_hint ? { provider_hint: embedMapped.provider_hint } : {}),
   };
 
-  // Keep a usable "default" profile even when global default is not referenced by steps.
-  // This avoids failing on integrations that expect a default key to exist.
-  if (!llm_profiles["default"]) {
-    const fallback = llm_profiles[idToName(step("preprocess"))] || llm_profiles["embedding"];
-    if (fallback) llm_profiles["default"] = { ...fallback };
-  }
-
   const memorize_config: any = {
     preprocess_llm_profile: idToName(step("preprocess")),
     memory_extract_llm_profile: idToName(step("memory_extract")),
@@ -1470,7 +1463,7 @@ function applyTimeZoneHints(payload: any, timeZone: string, timeZoneOffsetMin: n
 
 export async function proxyMemorizeConversation(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
-  const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+  const conversationId = String(req.body?.conversationId || "");
   // KISS: soul scope is the character name.
   // If characterId is missing, fall back to characterName (and vice-versa).
   const characterId = String(req.body?.soulId || req.body?.soulName || "");
@@ -1585,7 +1578,7 @@ export async function proxyRetrieveDefaultCategories(req: Request, res: Response
 export async function proxyConversationRetrieve(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
   const soulId = String(req.body?.soulId || req.body?.soulName || "");
-  const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+  const conversationId = String(req.body?.conversationId || "");
   const method = String(req.body?.method || "").trim().toLowerCase();
   const query = String(req.body?.query || "");
   const queries = Array.isArray(req.body?.queries) ? req.body.queries : undefined;
@@ -1619,7 +1612,7 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     if (Array.isArray(req.body?.history)) {
       payload.history = req.body.history;
     }
-    if (req.body?.buildTurnPrompt || req.body?.build_turn_prompt) {
+    if (req.body?.buildTurnPrompt) {
       payload.build_turn_prompt = true;
     }
     if (req.body?.soul_card) {
@@ -1641,15 +1634,15 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
 export async function proxyConversationTurn(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
   const soulId = String(req.body?.soulId || req.body?.soulName || "");
-  const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
-  const message = String(req.body?.message || req.body?.query || req.body?.text || "");
+  const conversationId = String(req.body?.conversationId || "");
+  const message = String(req.body?.message || "");
   const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
-  const applyTurnMaintenance = req.body?.applyTurnMaintenance ?? req.body?.apply_turn_maintenance;
-  const dryRun = req.body?.dryRun ?? req.body?.dry_run;
+  const applyTurnMaintenance = req.body?.applyTurnMaintenance;
+  const dryRun = req.body?.dryRun;
   const debug = req.body?.debug;
-  const promptOverridePayload = req.body?.promptOverridePayload ?? req.body?.prompt_override_payload;
+  const promptOverridePayload = req.body?.promptOverridePayload;
   const temperature = req.body?.temperature;
-  const maxTokens = req.body?.maxTokens ?? req.body?.max_tokens;
+  const maxTokens = req.body?.maxTokens;
 
   if (!userId || !soulId || !conversationId) {
     res.status(400).json({ error: "Missing userId/soulId(character name)/conversationId" });
@@ -1701,7 +1694,7 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
 export async function proxyConversationTurnUndo(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
   const soulId = String(req.body?.soulId || req.body?.soulName || "");
-  const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+  const conversationId = String(req.body?.conversationId || "");
   if (!userId || !soulId || !conversationId) {
     res.status(400).json({ error: "Missing userId/soulId/conversationId" });
     return;
@@ -1926,7 +1919,7 @@ export function registerConversationTurnUndo(router: Router): void {
 export async function proxyConversationCacheClear(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
   const soulId = String(req.body?.soulId || req.body?.soulName || "");
-  const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
+  const conversationId = String(req.body?.conversationId || "");
   if (!userId || !soulId || !conversationId) {
     res.status(400).json({ error: "Missing userId/soulId/conversationId" });
     return;
