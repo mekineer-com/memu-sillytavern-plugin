@@ -1644,12 +1644,9 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
   const conversationId = String(req.body?.conversationId || req.body?.conversation_id || "");
   const message = String(req.body?.message || req.body?.query || req.body?.text || "");
   const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
-  const runApimw = req.body?.runApimw ?? req.body?.run_apimw;
-  const waitApimw = req.body?.waitApimw ?? req.body?.wait_apimw;
   const applyTurnMaintenance = req.body?.applyTurnMaintenance ?? req.body?.apply_turn_maintenance;
   const dryRun = req.body?.dryRun ?? req.body?.dry_run;
   const debug = req.body?.debug;
-  const promptOverride = req.body?.promptOverride ?? req.body?.prompt_override;
   const promptOverridePayload = req.body?.promptOverridePayload ?? req.body?.prompt_override_payload;
   const temperature = req.body?.temperature;
   const maxTokens = req.body?.maxTokens ?? req.body?.max_tokens;
@@ -1673,16 +1670,11 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
     payload.user = { user_id: userId, soul_id: soulId };
     payload.message = message;
     if (history && history.length > 0) payload.history = history;
-    if (runApimw !== undefined) payload.run_apimw = !!runApimw;
-    if (waitApimw !== undefined) payload.wait_apimw = !!waitApimw;
     if (applyTurnMaintenance !== undefined) payload.apply_turn_maintenance = !!applyTurnMaintenance;
     if (dryRun !== undefined) payload.dry_run = !!dryRun;
     if (debug !== undefined) payload.debug = !!debug;
     if (req.body?.soul_card) {
       payload.soul_card = req.body.soul_card;
-    }
-    if (promptOverride !== undefined) {
-      payload.prompt_override = String(promptOverride);
     }
     if (promptOverridePayload !== undefined) {
       payload.prompt_override_payload = promptOverridePayload;
