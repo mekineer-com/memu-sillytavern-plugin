@@ -23761,10 +23761,7 @@ function warnOnce(key, msg, ttlMs = 30000) {
     if ((now - prev) < ttlMs)
         return;
     _warnOnceAt.set(key, now);
-    try {
-        console.warn(chalk_1.default.yellow(consts_1.MODULE_NAME), msg);
-    }
-    catch { }
+    console.warn(chalk_1.default.yellow(consts_1.MODULE_NAME), msg);
 }
 const CONFIG_FILENAME = "memu-plugin.config.json";
 const DEFAULT_CONFIG = {
@@ -23798,27 +23795,17 @@ function getConfigPath() {
 }
 function ensureConfigFileExists() {
     const cfgPath = getConfigPath();
-    try {
-        if (fs_1.default.existsSync(cfgPath))
-            return;
-        fs_1.default.writeFileSync(cfgPath, JSON.stringify({ ...DEFAULT_CONFIG, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
-    }
-    catch {
-        // ignore (non-fatal)
-    }
+    if (fs_1.default.existsSync(cfgPath))
+        return;
+    fs_1.default.writeFileSync(cfgPath, JSON.stringify({ ...DEFAULT_CONFIG, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
 }
 function readJsonIfExists(filePath) {
-    try {
-        if (!fs_1.default.existsSync(filePath))
-            return null;
-        const raw = fs_1.default.readFileSync(filePath, 'utf8');
-        if (!raw)
-            return null;
-        return JSON.parse(raw);
-    }
-    catch {
+    if (!fs_1.default.existsSync(filePath))
         return null;
-    }
+    const raw = fs_1.default.readFileSync(filePath, 'utf8');
+    if (!raw)
+        return null;
+    return JSON.parse(raw);
 }
 const _jsonCache = new Map();
 function readJsonCached(filePath, ttlMs = 2000) {
@@ -23906,12 +23893,7 @@ function getPluginConfig() {
 }
 function setPluginConfig(obj) {
     const cfg = sanitizeIncomingConfig(obj);
-    try {
-        fs_1.default.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
-    }
-    catch (e) {
-        console.warn(chalk_1.default.yellow(consts_1.MODULE_NAME), 'Failed to write config:', e);
-    }
+    fs_1.default.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
     _cachedPluginConfig = { cfg, at: Date.now() };
     return cfg;
 }
@@ -23924,22 +23906,17 @@ function listSTUserDirs() {
     const def = path_1.default.join(dataDir, "default-user");
     if (fs_1.default.existsSync(path_1.default.join(def, "settings.json")))
         dirs.push(def);
-    try {
-        if (fs_1.default.existsSync(dataDir)) {
-            const entries = fs_1.default.readdirSync(dataDir, { withFileTypes: true });
-            for (const ent of entries) {
-                if (!ent.isDirectory())
-                    continue;
-                const d = path_1.default.join(dataDir, ent.name);
-                if (dirs.includes(d))
-                    continue;
-                if (fs_1.default.existsSync(path_1.default.join(d, "settings.json")))
-                    dirs.push(d);
-            }
+    if (fs_1.default.existsSync(dataDir)) {
+        const entries = fs_1.default.readdirSync(dataDir, { withFileTypes: true });
+        for (const ent of entries) {
+            if (!ent.isDirectory())
+                continue;
+            const d = path_1.default.join(dataDir, ent.name);
+            if (dirs.includes(d))
+                continue;
+            if (fs_1.default.existsSync(path_1.default.join(d, "settings.json")))
+                dirs.push(d);
         }
-    }
-    catch {
-        // ignore
     }
     // As a last resort, allow running from inside a user dir
     if (!dirs.length) {
@@ -24356,10 +24333,7 @@ function httpGetJson(url, headers, timeoutMs = 15000) {
             });
             req.on('error', (e) => reject(e));
             req.setTimeout(timeoutMs, () => {
-                try {
-                    req.destroy(new Error('Timeout'));
-                }
-                catch { }
+                req.destroy(new Error('Timeout'));
             });
             req.end();
         }
@@ -24639,18 +24613,13 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
         payload.conversationId = opts.conversationId.trim();
     }
     // Minimal pointer (no filesystem probing): just store the expected SillyTavern chat file path.
-    try {
-        const chatFileName = String(opts?.chatFileName || '').trim();
-        const characterName = String(opts?.characterName || '').trim();
-        if (chatFileName) {
-            const name = chatFileName.endsWith('.jsonl') ? chatFileName : `${chatFileName}.jsonl`;
-            const charDir = safeFsName(characterName || characterId);
-            // Assumption: single-user default install (default-user).
-            payload.resource_url = path_1.default.join('data', 'default-user', 'chats', charDir, name);
-        }
-    }
-    catch {
-        // ignore; resource_url is optional
+    const chatFileName = String(opts?.chatFileName || '').trim();
+    const characterName = String(opts?.characterName || '').trim();
+    if (chatFileName) {
+        const name = chatFileName.endsWith('.jsonl') ? chatFileName : `${chatFileName}.jsonl`;
+        const charDir = safeFsName(characterName || characterId);
+        // Assumption: single-user default install (default-user).
+        payload.resource_url = path_1.default.join('data', 'default-user', 'chats', charDir, name);
     }
     return payload;
 }
@@ -25210,17 +25179,12 @@ async function proxyRetrieveDefaultCategories(req, res) {
     let srv = null;
     const payloadBase = buildMemuPayloadForLocal(cfg, userId, characterId, undefined);
     let storedCats = [];
-    try {
-        srv = await ensureLocalServer(cfg);
-        // POST /categories/search uses _get_service_from_payload() (API keys from ST profiles).
-        const payload = payloadBase;
-        payload.user = { user_id: userId, soul_id: characterId };
-        const resp = await httpJson(srv.baseUrl, '/categories/search', 'POST', payload);
-        storedCats = Array.isArray(resp?.categories) ? resp.categories : [];
-    }
-    catch (e) {
-        console.error(chalk_1.default.red(consts_1.MODULE_NAME), 'retrieveDefaultCategories: failed to load stored categories:', e?.message || String(e));
-    }
+    srv = await ensureLocalServer(cfg);
+    // POST /categories/search uses _get_service_from_payload() (API keys from ST profiles).
+    const payload = payloadBase;
+    payload.user = { user_id: userId, soul_id: characterId };
+    const resp = await httpJson(srv.baseUrl, '/categories/search', 'POST', payload);
+    storedCats = Array.isArray(resp?.categories) ? resp.categories : [];
     const out = [];
     const seen = new Set();
     for (const c of storedCats) {

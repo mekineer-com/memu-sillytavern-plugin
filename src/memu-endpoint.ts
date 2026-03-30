@@ -13,7 +13,7 @@ function warnOnce(key: string, msg: string, ttlMs: number = 30_000): void {
   const prev = _warnOnceAt.get(key) || 0;
   if ((now - prev) < ttlMs) return;
   _warnOnceAt.set(key, now);
-  try { console.warn(chalk.yellow(MODULE_NAME), msg); } catch {}
+  console.warn(chalk.yellow(MODULE_NAME), msg);
 }
 
 type MemuStep =
@@ -79,23 +79,15 @@ function getConfigPath(): string {
 
 function ensureConfigFileExists(): void {
   const cfgPath = getConfigPath();
-  try {
-    if (fs.existsSync(cfgPath)) return;
-    fs.writeFileSync(cfgPath, JSON.stringify({ ...DEFAULT_CONFIG, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
-  } catch {
-    // ignore (non-fatal)
-  }
+  if (fs.existsSync(cfgPath)) return;
+  fs.writeFileSync(cfgPath, JSON.stringify({ ...DEFAULT_CONFIG, updatedAt: new Date().toISOString() }, null, 2), 'utf8');
 }
 
 function readJsonIfExists(filePath: string): any | null {
-  try {
-    if (!fs.existsSync(filePath)) return null;
-    const raw = fs.readFileSync(filePath, 'utf8');
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+  if (!fs.existsSync(filePath)) return null;
+  const raw = fs.readFileSync(filePath, 'utf8');
+  if (!raw) return null;
+  return JSON.parse(raw);
 }
 
 
@@ -195,11 +187,7 @@ export function getPluginConfig(): MemuPluginConfig {
 
 export function setPluginConfig(obj: any): MemuPluginConfig {
   const cfg = sanitizeIncomingConfig(obj);
-  try {
-    fs.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
-  } catch (e) {
-    console.warn(chalk.yellow(MODULE_NAME), 'Failed to write config:', e);
-  }
+  fs.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
   _cachedPluginConfig = { cfg, at: Date.now() };
   return cfg;
 }
@@ -222,18 +210,14 @@ function listSTUserDirs(): string[] {
   const def = path.join(dataDir, "default-user");
   if (fs.existsSync(path.join(def, "settings.json"))) dirs.push(def);
 
-  try {
-    if (fs.existsSync(dataDir)) {
-      const entries = fs.readdirSync(dataDir, { withFileTypes: true });
-      for (const ent of entries) {
-        if (!ent.isDirectory()) continue;
-        const d = path.join(dataDir, ent.name);
-        if (dirs.includes(d)) continue;
-        if (fs.existsSync(path.join(d, "settings.json"))) dirs.push(d);
-      }
+  if (fs.existsSync(dataDir)) {
+    const entries = fs.readdirSync(dataDir, { withFileTypes: true });
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      const d = path.join(dataDir, ent.name);
+      if (dirs.includes(d)) continue;
+      if (fs.existsSync(path.join(d, "settings.json"))) dirs.push(d);
     }
-  } catch {
-    // ignore
   }
 
   // As a last resort, allow running from inside a user dir
@@ -689,7 +673,7 @@ function httpGetJson(url: string, headers: Record<string, string>, timeoutMs: nu
       );
       req.on('error', (e: any) => reject(e));
       req.setTimeout(timeoutMs, () => {
-        try { req.destroy(new Error('Timeout')); } catch {}
+        req.destroy(new Error('Timeout'));
       });
       req.end();
     } catch (e) {
@@ -995,17 +979,13 @@ function buildMemuPayloadForLocal(
   }
 
   // Minimal pointer (no filesystem probing): just store the expected SillyTavern chat file path.
-  try {
-    const chatFileName = String(opts?.chatFileName || '').trim();
-    const characterName = String(opts?.characterName || '').trim();
-    if (chatFileName) {
-      const name = chatFileName.endsWith('.jsonl') ? chatFileName : `${chatFileName}.jsonl`;
-      const charDir = safeFsName(characterName || characterId);
-      // Assumption: single-user default install (default-user).
-      payload.resource_url = path.join('data', 'default-user', 'chats', charDir, name);
-    }
-  } catch {
-    // ignore; resource_url is optional
+  const chatFileName = String(opts?.chatFileName || '').trim();
+  const characterName = String(opts?.characterName || '').trim();
+  if (chatFileName) {
+    const name = chatFileName.endsWith('.jsonl') ? chatFileName : `${chatFileName}.jsonl`;
+    const charDir = safeFsName(characterName || characterId);
+    // Assumption: single-user default install (default-user).
+    payload.resource_url = path.join('data', 'default-user', 'chats', charDir, name);
   }
 
   return payload;
@@ -1575,16 +1555,12 @@ export async function proxyRetrieveDefaultCategories(req: Request, res: Response
   const payloadBase = buildMemuPayloadForLocal(cfg, userId, characterId, undefined);
 
   let storedCats: any[] = [];
-  try {
-    srv = await ensureLocalServer(cfg);
-    // POST /categories/search uses _get_service_from_payload() (API keys from ST profiles).
-    const payload = payloadBase;
-    payload.user = { user_id: userId, soul_id: characterId };
-    const resp: any = await httpJson(srv.baseUrl, '/categories/search', 'POST', payload);
-    storedCats = Array.isArray(resp?.categories) ? resp.categories : [];
-  } catch (e: any) {
-    console.error(chalk.red(MODULE_NAME), 'retrieveDefaultCategories: failed to load stored categories:', e?.message || String(e));
-  }
+  srv = await ensureLocalServer(cfg);
+  // POST /categories/search uses _get_service_from_payload() (API keys from ST profiles).
+  const payload = payloadBase;
+  payload.user = { user_id: userId, soul_id: characterId };
+  const resp: any = await httpJson(srv.baseUrl, '/categories/search', 'POST', payload);
+  storedCats = Array.isArray(resp?.categories) ? resp.categories : [];
 
   const out: any[] = [];
   const seen = new Set<string>();
