@@ -943,7 +943,7 @@ function buildMemuPayloadForLocal(
     api_key: embedCred.key,
     chat_model: embedCred.model,
     client_backend: embedMapped.client_backend,
-    embed_model: (cfg as any).embeddingModel || "text-embedding-3-small",
+    embed_model: String((cfg as any).embeddingModel || "").trim(),
     ...(embedMapped.provider_hint ? { provider_hint: embedMapped.provider_hint } : {}),
   };
 
