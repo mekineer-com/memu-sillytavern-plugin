@@ -8,7 +8,6 @@ interface MemuPluginConfig {
     updatedAt: string;
     serverPath?: string;
     autoStartServer?: boolean;
-    embeddingModel?: string;
     embeddingModelSelected?: string;
     embeddingModelManual?: string;
 }

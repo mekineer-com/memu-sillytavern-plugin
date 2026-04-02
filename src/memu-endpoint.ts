@@ -37,7 +37,6 @@ interface MemuPluginConfig {
   autoStartServer?: boolean;
 
   // Embeddings model fields (dropdown overrides manual).
-  embeddingModel?: string;
   embeddingModelSelected?: string;
   embeddingModelManual?: string;
 }
@@ -150,10 +149,8 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
   // Normalize/derive embedding model fields (dropdown overrides manual).
   const selected = typeof (cfg as any).embeddingModelSelected === "string" ? String((cfg as any).embeddingModelSelected).trim() : "";
   const manual = typeof (cfg as any).embeddingModelManual === "string" ? String((cfg as any).embeddingModelManual).trim() : "";
-  const effective = selected || manual;
   (cfg as any).embeddingModelSelected = selected || undefined;
   (cfg as any).embeddingModelManual = manual || undefined;
-  (cfg as any).embeddingModel = effective || undefined;
   // External server settings (local mode): only serverPath is user-configurable.
   const serverPathRaw = String((cfg as any).serverPath || '').trim();
   const home2 = String(process.env.HOME || process.env.USERPROFILE || '').trim();
@@ -943,7 +940,7 @@ function buildMemuPayloadForLocal(
     api_key: embedCred.key,
     chat_model: embedCred.model,
     client_backend: embedMapped.client_backend,
-    embed_model: String((cfg as any).embeddingModel || "").trim(),
+    embed_model: String((cfg as any).embeddingModelSelected || (cfg as any).embeddingModelManual || "").trim(),
     ...(embedMapped.provider_hint ? { provider_hint: embedMapped.provider_hint } : {}),
   };
 
@@ -1465,8 +1462,8 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
   const conversationId = String(req.body?.conversationId || "");
   // KISS: soul scope is the character name.
   // If characterId is missing, fall back to characterName (and vice-versa).
-  const characterId = String(req.body?.soulId || req.body?.soulName || "");
-  const characterName = String(req.body?.soulName || req.body?.soulId || "");
+  const characterId = String(req.body?.soulId || "");
+  const characterName = String(req.body?.soulName || "");
   const userName = String(req.body?.userName || "").trim();
   const soulName = String(req.body?.soulName || characterName || characterId || "").trim();
   const chatFileName = String(req.body?.chatFileName || "");
@@ -1478,7 +1475,7 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
   const timeZoneOffsetMin = Number.isFinite(Number(timeZoneOffsetMinRaw)) ? Number(timeZoneOffsetMinRaw) : undefined;
 
   if (!userId || !characterId || !Array.isArray(conversation)) {
-    res.status(400).json({ error: "Missing userId/soulId(character name)/conversation" });
+    res.status(400).json({ error: "Missing userId/soulId/conversation" });
     return;
   }
 
@@ -1535,9 +1532,9 @@ export async function proxyGetTaskSummaryReady(req: Request, res: Response): Pro
 
 export async function proxyRetrieveDefaultCategories(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
-  const characterId = String(req.body?.soulId || req.body?.soulName || "");
+  const characterId = String(req.body?.soulId || "");
   if (!userId || !characterId) {
-    res.status(400).json({ error: "Missing userId/soulId(character name)" });
+    res.status(400).json({ error: "Missing userId/soulId" });
     return;
   }
 
@@ -1576,14 +1573,14 @@ export async function proxyRetrieveDefaultCategories(req: Request, res: Response
 
 export async function proxyConversationRetrieve(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
-  const soulId = String(req.body?.soulId || req.body?.soulName || "");
+  const soulId = String(req.body?.soulId || "");
   const conversationId = String(req.body?.conversationId || "");
   const method = String(req.body?.method || "").trim().toLowerCase();
   const query = String(req.body?.query || "");
   const queries = Array.isArray(req.body?.queries) ? req.body.queries : undefined;
 
   if (!userId || !soulId || !conversationId) {
-    res.status(400).json({ error: "Missing userId/soulId(character name)/conversationId" });
+    res.status(400).json({ error: "Missing userId/soulId/conversationId" });
     return;
   }
   if (method !== "rag" && method !== "llm") {
@@ -1632,7 +1629,7 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
 
 export async function proxyConversationTurn(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
-  const soulId = String(req.body?.soulId || req.body?.soulName || "");
+  const soulId = String(req.body?.soulId || "");
   const conversationId = String(req.body?.conversationId || "");
   const message = String(req.body?.message || "");
   const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
@@ -1644,7 +1641,7 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
   const maxTokens = req.body?.maxTokens;
 
   if (!userId || !soulId || !conversationId) {
-    res.status(400).json({ error: "Missing userId/soulId(character name)/conversationId" });
+    res.status(400).json({ error: "Missing userId/soulId/conversationId" });
     return;
   }
   if (!message.trim()) {
@@ -1692,7 +1689,7 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
 
 export async function proxyConversationTurnUndo(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
-  const soulId = String(req.body?.soulId || req.body?.soulName || "");
+  const soulId = String(req.body?.soulId || "");
   const conversationId = String(req.body?.conversationId || "");
   if (!userId || !soulId || !conversationId) {
     res.status(400).json({ error: "Missing userId/soulId/conversationId" });
@@ -1718,9 +1715,9 @@ export async function proxyConversationTurnUndo(req: Request, res: Response): Pr
 
 export async function proxyScopeStorageProbe(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
-  const soulId = String(req.body?.soulId || req.body?.soulName || "");
+  const soulId = String(req.body?.soulId || "");
   if (!userId || !soulId) {
-    res.status(400).json({ error: "Missing userId/soulId(character name)" });
+    res.status(400).json({ error: "Missing userId/soulId" });
     return;
   }
 

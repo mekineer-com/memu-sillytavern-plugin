@@ -23858,10 +23858,8 @@ function sanitizeIncomingConfig(obj) {
     // Normalize/derive embedding model fields (dropdown overrides manual).
     const selected = typeof cfg.embeddingModelSelected === "string" ? String(cfg.embeddingModelSelected).trim() : "";
     const manual = typeof cfg.embeddingModelManual === "string" ? String(cfg.embeddingModelManual).trim() : "";
-    const effective = selected || manual;
     cfg.embeddingModelSelected = selected || undefined;
     cfg.embeddingModelManual = manual || undefined;
-    cfg.embeddingModel = effective || undefined;
     // External server settings (local mode): only serverPath is user-configurable.
     const serverPathRaw = String(cfg.serverPath || '').trim();
     const home2 = String(process.env.HOME || process.env.USERPROFILE || '').trim();
@@ -24578,7 +24576,7 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
         api_key: embedCred.key,
         chat_model: embedCred.model,
         client_backend: embedMapped.client_backend,
-        embed_model: String(cfg.embeddingModel || "").trim(),
+        embed_model: String(cfg.embeddingModelSelected || cfg.embeddingModelManual || "").trim(),
         ...(embedMapped.provider_hint ? { provider_hint: embedMapped.provider_hint } : {}),
     };
     const memorize_config = {
@@ -25093,8 +25091,8 @@ async function proxyMemorizeConversation(req, res) {
     const conversationId = String(req.body?.conversationId || "");
     // KISS: soul scope is the character name.
     // If characterId is missing, fall back to characterName (and vice-versa).
-    const characterId = String(req.body?.soulId || req.body?.soulName || "");
-    const characterName = String(req.body?.soulName || req.body?.soulId || "");
+    const characterId = String(req.body?.soulId || "");
+    const characterName = String(req.body?.soulName || "");
     const userName = String(req.body?.userName || "").trim();
     const soulName = String(req.body?.soulName || characterName || characterId || "").trim();
     const chatFileName = String(req.body?.chatFileName || "");
@@ -25105,7 +25103,7 @@ async function proxyMemorizeConversation(req, res) {
     const timeZoneOffsetMinRaw = req.body?.timeZoneOffsetMin;
     const timeZoneOffsetMin = Number.isFinite(Number(timeZoneOffsetMinRaw)) ? Number(timeZoneOffsetMinRaw) : undefined;
     if (!userId || !characterId || !Array.isArray(conversation)) {
-        res.status(400).json({ error: "Missing userId/soulId(character name)/conversation" });
+        res.status(400).json({ error: "Missing userId/soulId/conversation" });
         return;
     }
     pruneLocalTasks();
@@ -25159,9 +25157,9 @@ async function proxyGetTaskSummaryReady(req, res) {
 }
 async function proxyRetrieveDefaultCategories(req, res) {
     const userId = String(req.body?.userId || "");
-    const characterId = String(req.body?.soulId || req.body?.soulName || "");
+    const characterId = String(req.body?.soulId || "");
     if (!userId || !characterId) {
-        res.status(400).json({ error: "Missing userId/soulId(character name)" });
+        res.status(400).json({ error: "Missing userId/soulId" });
         return;
     }
     const cfg = readPluginConfig();
@@ -25195,13 +25193,13 @@ async function proxyRetrieveDefaultCategories(req, res) {
 }
 async function proxyConversationRetrieve(req, res) {
     const userId = String(req.body?.userId || "");
-    const soulId = String(req.body?.soulId || req.body?.soulName || "");
+    const soulId = String(req.body?.soulId || "");
     const conversationId = String(req.body?.conversationId || "");
     const method = String(req.body?.method || "").trim().toLowerCase();
     const query = String(req.body?.query || "");
     const queries = Array.isArray(req.body?.queries) ? req.body.queries : undefined;
     if (!userId || !soulId || !conversationId) {
-        res.status(400).json({ error: "Missing userId/soulId(character name)/conversationId" });
+        res.status(400).json({ error: "Missing userId/soulId/conversationId" });
         return;
     }
     if (method !== "rag" && method !== "llm") {
@@ -25242,7 +25240,7 @@ async function proxyConversationRetrieve(req, res) {
 }
 async function proxyConversationTurn(req, res) {
     const userId = String(req.body?.userId || "");
-    const soulId = String(req.body?.soulId || req.body?.soulName || "");
+    const soulId = String(req.body?.soulId || "");
     const conversationId = String(req.body?.conversationId || "");
     const message = String(req.body?.message || "");
     const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
@@ -25253,7 +25251,7 @@ async function proxyConversationTurn(req, res) {
     const temperature = req.body?.temperature;
     const maxTokens = req.body?.maxTokens;
     if (!userId || !soulId || !conversationId) {
-        res.status(400).json({ error: "Missing userId/soulId(character name)/conversationId" });
+        res.status(400).json({ error: "Missing userId/soulId/conversationId" });
         return;
     }
     if (!message.trim()) {
@@ -25297,7 +25295,7 @@ async function proxyConversationTurn(req, res) {
 }
 async function proxyConversationTurnUndo(req, res) {
     const userId = String(req.body?.userId || "");
-    const soulId = String(req.body?.soulId || req.body?.soulName || "");
+    const soulId = String(req.body?.soulId || "");
     const conversationId = String(req.body?.conversationId || "");
     if (!userId || !soulId || !conversationId) {
         res.status(400).json({ error: "Missing userId/soulId/conversationId" });
@@ -25317,9 +25315,9 @@ async function proxyConversationTurnUndo(req, res) {
 }
 async function proxyScopeStorageProbe(req, res) {
     const userId = String(req.body?.userId || "");
-    const soulId = String(req.body?.soulId || req.body?.soulName || "");
+    const soulId = String(req.body?.soulId || "");
     if (!userId || !soulId) {
-        res.status(400).json({ error: "Missing userId/soulId(character name)" });
+        res.status(400).json({ error: "Missing userId/soulId" });
         return;
     }
     try {
