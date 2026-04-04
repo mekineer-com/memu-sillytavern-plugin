@@ -39,6 +39,7 @@ interface MemuPluginConfig {
   // Embeddings model fields (dropdown overrides manual).
   embeddingModelSelected?: string;
   embeddingModelManual?: string;
+  embeddingBatchSize?: number;
 }
 
 const CONFIG_FILENAME = "memu-plugin.config.json";
@@ -56,6 +57,7 @@ const DEFAULT_CONFIG: MemuPluginConfig = {
     return home ? path.join(home, 'apps', 'mcp-memu-server') : undefined;
   })(),
   autoStartServer: true,
+  embeddingBatchSize: 25,
   updatedAt: new Date().toISOString(),
 };
 
@@ -151,6 +153,9 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
   const manual = typeof (cfg as any).embeddingModelManual === "string" ? String((cfg as any).embeddingModelManual).trim() : "";
   (cfg as any).embeddingModelSelected = selected || undefined;
   (cfg as any).embeddingModelManual = manual || undefined;
+  const embeddingBatchSize = Number((cfg as any).embeddingBatchSize);
+  (cfg as any).embeddingBatchSize =
+    Number.isFinite(embeddingBatchSize) && embeddingBatchSize > 0 ? Math.floor(embeddingBatchSize) : 25;
   // External server settings (local mode): only serverPath is user-configurable.
   const serverPathRaw = String((cfg as any).serverPath || '').trim();
   const home2 = String(process.env.HOME || process.env.USERPROFILE || '').trim();
@@ -941,6 +946,7 @@ function buildMemuPayloadForLocal(
     chat_model: embedCred.model,
     client_backend: embedMapped.client_backend,
     embed_model: String((cfg as any).embeddingModelSelected || (cfg as any).embeddingModelManual || "").trim(),
+    embed_batch_size: Number((cfg as any).embeddingBatchSize || 25),
     ...(embedMapped.provider_hint ? { provider_hint: embedMapped.provider_hint } : {}),
   };
 

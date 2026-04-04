@@ -10,6 +10,7 @@ interface MemuPluginConfig {
     autoStartServer?: boolean;
     embeddingModelSelected?: string;
     embeddingModelManual?: string;
+    embeddingBatchSize?: number;
 }
 export declare function getPluginConfig(): MemuPluginConfig;
 export declare function setPluginConfig(obj: any): MemuPluginConfig;

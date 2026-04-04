@@ -23774,6 +23774,7 @@ const DEFAULT_CONFIG = {
         return home ? path_1.default.join(home, 'apps', 'mcp-memu-server') : undefined;
     })(),
     autoStartServer: true,
+    embeddingBatchSize: 25,
     updatedAt: new Date().toISOString(),
 };
 // -----------------------------
@@ -23860,6 +23861,9 @@ function sanitizeIncomingConfig(obj) {
     const manual = typeof cfg.embeddingModelManual === "string" ? String(cfg.embeddingModelManual).trim() : "";
     cfg.embeddingModelSelected = selected || undefined;
     cfg.embeddingModelManual = manual || undefined;
+    const embeddingBatchSize = Number(cfg.embeddingBatchSize);
+    cfg.embeddingBatchSize =
+        Number.isFinite(embeddingBatchSize) && embeddingBatchSize > 0 ? Math.floor(embeddingBatchSize) : 25;
     // External server settings (local mode): only serverPath is user-configurable.
     const serverPathRaw = String(cfg.serverPath || '').trim();
     const home2 = String(process.env.HOME || process.env.USERPROFILE || '').trim();
@@ -24577,6 +24581,7 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
         chat_model: embedCred.model,
         client_backend: embedMapped.client_backend,
         embed_model: String(cfg.embeddingModelSelected || cfg.embeddingModelManual || "").trim(),
+        embed_batch_size: Number(cfg.embeddingBatchSize || 25),
         ...(embedMapped.provider_hint ? { provider_hint: embedMapped.provider_hint } : {}),
     };
     const memorize_config = {
