@@ -11,6 +11,7 @@
   },
   "serverPath": "/path/to/mcp-memu-server",
   "autoStartServer": true,
-  "embeddingModel": "text-embedding-3-small",
+  "embeddingModelSelected": "text-embedding-3-large",
+  "embeddingModel": "text-embedding-3-large",
   "updatedAt": "2026-03-07T00:00:00.000Z"
 }
