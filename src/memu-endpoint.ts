@@ -433,14 +433,62 @@ function normalizeProfile(p: AnyObject): {
   return { id, name, provider, baseUrl, model, secretId, tokenInline };
 }
 
-function resolveProfileBaseUrl(p: AnyObject, n?: ReturnType<typeof normalizeProfile>): string | null {
+function resolveProfileBaseUrl(
+  p: AnyObject,
+  n?: ReturnType<typeof normalizeProfile>,
+  allProfiles?: AnyObject[],
+): string | null {
   const prof = n || normalizeProfile(p);
   const direct = typeof prof.baseUrl === 'string' ? prof.baseUrl.trim() : '';
   if (direct) return direct;
+
   const provider = String(prof.provider || '').trim().toLowerCase();
-  if (provider === 'nanogpt') {
-    return 'https://nano-gpt.com/api/v1/';
+  const secretId = typeof prof.secretId === 'string' ? prof.secretId.trim() : '';
+  const mode = String((p as any)?.mode || '').trim().toLowerCase();
+  const userDir = typeof (p as any)?.__st_user_dir === 'string' ? String((p as any).__st_user_dir) : '';
+  const pool = Array.isArray(allProfiles) && allProfiles.length ? allProfiles : loadAllProfilesFromSettings();
+
+  // Prefer inheriting URL from another profile in the same ST user dir/provider.
+  const matchBase = (requireSameSecret: boolean): string | null => {
+    for (const candidate of pool) {
+      if (!candidate || candidate === p) continue;
+      const candDir = typeof (candidate as any)?.__st_user_dir === 'string' ? String((candidate as any).__st_user_dir) : '';
+      if (userDir && candDir && candDir !== userDir) continue;
+      const cn = normalizeProfile(candidate);
+      const cp = String(cn.provider || '').trim().toLowerCase();
+      if (cp !== provider) continue;
+      const cmode = String((candidate as any)?.mode || '').trim().toLowerCase();
+      if (mode && cmode && cmode !== mode) continue;
+      if (requireSameSecret) {
+        const csecret = typeof cn.secretId === 'string' ? cn.secretId.trim() : '';
+        if (!secretId || !csecret || csecret !== secretId) continue;
+      }
+      const cbase = typeof cn.baseUrl === 'string' ? cn.baseUrl.trim() : '';
+      if (cbase) return cbase;
+    }
+    return null;
+  };
+
+  const inherited = matchBase(true) || matchBase(false);
+  if (inherited) return inherited;
+
+  // Then use explicit ST global override values when present.
+  if (userDir) {
+    const settings = readJsonCached(path.join(userDir, 'settings.json'));
+    if (settings && typeof settings === 'object') {
+      const reverseProxy = typeof (settings as any).reverse_proxy === 'string'
+        ? (settings as any).reverse_proxy.trim()
+        : '';
+      if (reverseProxy) return reverseProxy;
+      if (provider === 'custom') {
+        const customUrl = typeof (settings as any).custom_url === 'string'
+          ? (settings as any).custom_url.trim()
+          : '';
+        if (customUrl) return customUrl;
+      }
+    }
   }
+
   return null;
 }
 
@@ -582,7 +630,7 @@ export function getConnectionProfilesSummary(): {
   for (const p of profiles) {
     try {
       const n = normalizeProfile(p);
-      const effectiveBaseUrl = resolveProfileBaseUrl(p, n);
+      const effectiveBaseUrl = resolveProfileBaseUrl(p, n, profiles);
       const secrets = loadSecrets((p as any).__st_user_dir);
       const key = n.tokenInline || (secrets ? pickKeyForProvider(n.provider, secrets, n.secretId) : null);
       const hasSignal = Boolean((effectiveBaseUrl && effectiveBaseUrl.trim()) || (n.model && n.model.trim()) || (key && String(key).trim()));
@@ -804,7 +852,7 @@ function resolveProfileCredentials(profileId: string): {
   if (!chosen) return null;
 
   const p = normalizeProfile(chosen);
-  const effectiveBaseUrl = resolveProfileBaseUrl(chosen, p);
+  const effectiveBaseUrl = resolveProfileBaseUrl(chosen, p, profiles);
   const userDir = (chosen as any).__st_user_dir as string | undefined;
   const secrets = loadSecrets(userDir);
 
