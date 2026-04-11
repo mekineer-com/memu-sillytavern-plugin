@@ -1611,6 +1611,12 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     if (queries && queries.length > 0) {
       payload.queries = queries;
     }
+    const retrieveConfig = (payload.retrieve_config && typeof payload.retrieve_config === 'object')
+      ? { ...payload.retrieve_config }
+      : {};
+    retrieveConfig.route_intention = true;
+    retrieveConfig.sufficiency_check = true;
+    payload.retrieve_config = retrieveConfig;
     if (Array.isArray(req.body?.history)) {
       payload.history = req.body.history;
     }
