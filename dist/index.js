@@ -24110,6 +24110,17 @@ function normalizeProfile(p) {
         null;
     return { id, name, provider, baseUrl, model, secretId, tokenInline };
 }
+function resolveProfileBaseUrl(p, n) {
+    const prof = n || normalizeProfile(p);
+    const direct = typeof prof.baseUrl === 'string' ? prof.baseUrl.trim() : '';
+    if (direct)
+        return direct;
+    const provider = String(prof.provider || '').trim().toLowerCase();
+    if (provider === 'nanogpt') {
+        return 'https://nano-gpt.com/api/v1/';
+    }
+    return null;
+}
 function findProfileById(profiles, id) {
     for (const p of profiles) {
         if (String(p.id) === id)
@@ -24228,13 +24239,14 @@ function getConnectionProfilesSummary() {
     for (const p of profiles) {
         try {
             const n = normalizeProfile(p);
+            const effectiveBaseUrl = resolveProfileBaseUrl(p, n);
             const secrets = loadSecrets(p.__st_user_dir);
             const key = n.tokenInline || (secrets ? pickKeyForProvider(n.provider, secrets, n.secretId) : null);
-            const hasSignal = Boolean((n.baseUrl && n.baseUrl.trim()) || (n.model && n.model.trim()) || (key && String(key).trim()));
+            const hasSignal = Boolean((effectiveBaseUrl && effectiveBaseUrl.trim()) || (n.model && n.model.trim()) || (key && String(key).trim()));
             if (!hasSignal)
                 continue;
-            const chatCapable = Boolean((n.baseUrl && n.baseUrl.trim()) && (n.model && n.model.trim()) && (key && String(key).trim()));
-            const embListCapable = Boolean((n.baseUrl && n.baseUrl.trim()) && (key && String(key).trim()) && (openaiLike.has(String(n.provider || '').toLowerCase()) || /nano-gpt\.com/i.test(String(n.baseUrl || ''))));
+            const chatCapable = Boolean((effectiveBaseUrl && effectiveBaseUrl.trim()) && (n.model && n.model.trim()) && (key && String(key).trim()));
+            const embListCapable = Boolean((effectiveBaseUrl && effectiveBaseUrl.trim()) && (key && String(key).trim()) && (openaiLike.has(String(n.provider || '').toLowerCase()) || /nano-gpt\.com/i.test(String(effectiveBaseUrl || ''))));
             const id = String(p.id || '').trim();
             let name = String(p.name || p.label || p.title || '').trim();
             const looksUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name);
@@ -24244,7 +24256,7 @@ function getConnectionProfilesSummary() {
             if (!name) {
                 const model = String((n.model || '')).trim();
                 const prov = String((n.provider || '')).trim();
-                const host = n.baseUrl ? String(n.baseUrl).replace(/^https?:\/\//, '').replace(/\/.*$/, '') : '';
+                const host = effectiveBaseUrl ? String(effectiveBaseUrl).replace(/^https?:\/\//, '').replace(/\/.*$/, '') : '';
                 name = [prov || 'provider', model || '', host ? '@' + host : ''].filter(Boolean).join(' ');
             }
             if (!name)
@@ -24440,12 +24452,13 @@ function resolveProfileCredentials(profileId) {
     if (!chosen)
         return null;
     const p = normalizeProfile(chosen);
+    const effectiveBaseUrl = resolveProfileBaseUrl(chosen, p);
     const userDir = chosen.__st_user_dir;
     const secrets = loadSecrets(userDir);
     const key = p.tokenInline || pickKeyForProvider(p.provider, secrets, p.secretId);
-    if (!p.baseUrl || !p.model || !key) {
+    if (!effectiveBaseUrl || !p.model || !key) {
         const missing = [
-            !p.baseUrl ? "base_url" : null,
+            !effectiveBaseUrl ? "base_url" : null,
             !p.model ? "model" : null,
             !key ? "api_key" : null,
         ].filter(Boolean);
@@ -24453,7 +24466,7 @@ function resolveProfileCredentials(profileId) {
             ok: false,
             message: `Missing ${missing.join(", ")} for profile '${p.name}' (${p.id}).`,
             provider: p.provider,
-            baseUrl: p.baseUrl || "",
+            baseUrl: effectiveBaseUrl || "",
             model: p.model || "",
             key: key || "",
         };
@@ -24461,7 +24474,7 @@ function resolveProfileCredentials(profileId) {
     return {
         ok: true,
         provider: p.provider,
-        baseUrl: p.baseUrl,
+        baseUrl: effectiveBaseUrl,
         model: p.model,
         key: key,
     };
