@@ -1993,3 +1993,30 @@ export function registerScopeStorageProbe(router: Router): void {
 export function registerLocalHealth(router: Router): void {
   router.get('/health', proxyLocalHealth);
 }
+
+export async function proxyNarrativeSuggestion(req: Request, res: Response): Promise<void> {
+  const userId = String(req.body?.userId || "");
+  const soulId = String(req.body?.soulId || "");
+  const suggestion = String(req.body?.suggestion || "");
+  if (!userId || !soulId || !suggestion) {
+    res.status(400).json({ error: "Missing userId/soulId/suggestion" });
+    return;
+  }
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const resp = await httpJson(
+      srv.baseUrl,
+      `/souls/${encodeURIComponent(soulId)}/narrative_suggestion`,
+      "POST",
+      { user_id: userId, suggestion },
+    );
+    res.json(resp ?? {});
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+}
+
+export function registerNarrativeSuggestion(router: Router): void {
+  router.post("/narrativeSuggestion", proxyNarrativeSuggestion);
+}

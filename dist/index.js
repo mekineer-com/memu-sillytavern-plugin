@@ -23683,6 +23683,7 @@ async function init(router) {
     (0, memu_endpoint_1.registerConversationTurnUndo)(router);
     (0, memu_endpoint_1.registerScopeStorageProbe)(router);
     (0, memu_endpoint_1.registerMemorizeConversation)(router);
+    (0, memu_endpoint_1.registerNarrativeSuggestion)(router);
     (0, memu_endpoint_1.registerLocalHealth)(router);
     registerMetaEndpoints(router);
     (0, memu_endpoint_1.registerServerControl)(router);
@@ -23745,6 +23746,8 @@ exports.registerConversationTurn = registerConversationTurn;
 exports.registerConversationTurnUndo = registerConversationTurnUndo;
 exports.registerScopeStorageProbe = registerScopeStorageProbe;
 exports.registerLocalHealth = registerLocalHealth;
+exports.proxyNarrativeSuggestion = proxyNarrativeSuggestion;
+exports.registerNarrativeSuggestion = registerNarrativeSuggestion;
 const chalk_1 = __importDefault(__webpack_require__(/*! chalk */ "./node_modules/chalk/source/index.js"));
 const child_process_1 = __webpack_require__(/*! child_process */ "child_process");
 const crypto_1 = __importDefault(__webpack_require__(/*! crypto */ "crypto"));
@@ -25572,6 +25575,27 @@ function registerScopeStorageProbe(router) {
 }
 function registerLocalHealth(router) {
     router.get('/health', proxyLocalHealth);
+}
+async function proxyNarrativeSuggestion(req, res) {
+    const userId = String(req.body?.userId || "");
+    const soulId = String(req.body?.soulId || "");
+    const suggestion = String(req.body?.suggestion || "");
+    if (!userId || !soulId || !suggestion) {
+        res.status(400).json({ error: "Missing userId/soulId/suggestion" });
+        return;
+    }
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const resp = await httpJson(srv.baseUrl, `/souls/${encodeURIComponent(soulId)}/narrative_suggestion`, "POST", { user_id: userId, suggestion });
+        res.json(resp ?? {});
+    }
+    catch (e) {
+        res.status(500).json({ error: e?.message || String(e) });
+    }
+}
+function registerNarrativeSuggestion(router) {
+    router.post("/narrativeSuggestion", proxyNarrativeSuggestion);
 }
 
 
