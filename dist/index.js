@@ -25325,6 +25325,8 @@ async function proxyConversationTurn(req, res) {
     const promptOverridePayload = req.body?.promptOverridePayload;
     const temperature = req.body?.temperature;
     const maxTokens = req.body?.maxTokens;
+    const timeZone = req.body?.timeZone;
+    const timeZoneOffsetMin = req.body?.timeZoneOffsetMin;
     if (!userId || !soulId || !conversationId) {
         res.status(400).json({ error: "Missing userId/soulId/conversationId" });
         return;
@@ -25360,6 +25362,12 @@ async function proxyConversationTurn(req, res) {
         }
         if (maxTokens !== undefined) {
             payload.max_tokens = maxTokens;
+        }
+        if (typeof timeZone === "string" && timeZone.trim()) {
+            payload.time_zone = timeZone;
+        }
+        if (typeof timeZoneOffsetMin === "number" && Number.isFinite(timeZoneOffsetMin)) {
+            payload.time_zone_offset_min = timeZoneOffsetMin;
         }
         const resp = await httpJson(srv.baseUrl, `/conversation/${encodeURIComponent(conversationId)}/turn`, "POST", payload);
         res.json(resp);
