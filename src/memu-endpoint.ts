@@ -1687,6 +1687,9 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     if (req.body?.soul_card) {
       payload.soul_card = req.body.soul_card;
     }
+    if (req.body?.mentalHealthAddon === true) {
+      payload.mental_health_addon = true;
+    }
 
     const resp = await httpJson(
       srv.baseUrl,

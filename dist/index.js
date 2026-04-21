@@ -25306,6 +25306,9 @@ async function proxyConversationRetrieve(req, res) {
         if (req.body?.soul_card) {
             payload.soul_card = req.body.soul_card;
         }
+        if (req.body?.mentalHealthAddon === true) {
+            payload.mental_health_addon = true;
+        }
         const resp = await httpJson(srv.baseUrl, `/conversation/${encodeURIComponent(conversationId)}/retrieve`, "POST", payload);
         res.json(resp);
     }
