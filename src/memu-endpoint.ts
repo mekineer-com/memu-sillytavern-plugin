@@ -2031,3 +2031,113 @@ export async function proxyNarrativeSuggestion(req: Request, res: Response): Pro
 export function registerNarrativeSuggestion(router: Router): void {
   router.post("/narrativeSuggestion", proxyNarrativeSuggestion);
 }
+
+export async function proxyListRelationships(req: Request, res: Response): Promise<void> {
+  const userId = String(req.query?.userId || "");
+  const soulId = String(req.query?.soulId || "");
+  if (!userId || !soulId) {
+    res.status(400).json({ error: "Missing userId/soulId" });
+    return;
+  }
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const q = new URLSearchParams();
+    q.set("user_id", userId);
+    const resp = await httpJson(
+      srv.baseUrl,
+      `/souls/${encodeURIComponent(soulId)}/relationships?${q.toString()}`,
+      "GET",
+    );
+    res.json(resp ?? { relationships: [] });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+}
+
+export async function proxyCreateRelationship(req: Request, res: Response): Promise<void> {
+  const userId = String(req.body?.userId || "");
+  const soulId = String(req.body?.soulId || "");
+  const name = String(req.body?.name || "");
+  const relationship = String(req.body?.relationship || "");
+  if (!userId || !soulId || !name.trim()) {
+    res.status(400).json({ error: "Missing userId/soulId/name" });
+    return;
+  }
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const resp = await httpJson(
+      srv.baseUrl,
+      `/souls/${encodeURIComponent(soulId)}/relationships`,
+      "POST",
+      {
+        user_id: userId,
+        name,
+        relationship,
+      },
+    );
+    res.json(resp ?? {});
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+}
+
+export async function proxyUpdateRelationship(req: Request, res: Response): Promise<void> {
+  const userId = String(req.body?.userId || "");
+  const soulId = String(req.body?.soulId || "");
+  const speakerId = String(req.params?.speakerId || "");
+  const name = req.body?.name;
+  const relationship = req.body?.relationship;
+  if (!userId || !soulId || !speakerId) {
+    res.status(400).json({ error: "Missing userId/soulId/speakerId" });
+    return;
+  }
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const body: Record<string, any> = { user_id: userId };
+    if (name !== undefined) body.name = String(name);
+    if (relationship !== undefined) body.relationship = String(relationship);
+    const resp = await httpJson(
+      srv.baseUrl,
+      `/souls/${encodeURIComponent(soulId)}/relationships/${encodeURIComponent(speakerId)}`,
+      "PATCH",
+      body,
+    );
+    res.json(resp ?? {});
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+}
+
+export async function proxyDeleteRelationship(req: Request, res: Response): Promise<void> {
+  const userId = String(req.query?.userId || "");
+  const soulId = String(req.query?.soulId || "");
+  const speakerId = String(req.params?.speakerId || "");
+  if (!userId || !soulId || !speakerId) {
+    res.status(400).json({ error: "Missing userId/soulId/speakerId" });
+    return;
+  }
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const q = new URLSearchParams();
+    q.set("user_id", userId);
+    const resp = await httpJson(
+      srv.baseUrl,
+      `/souls/${encodeURIComponent(soulId)}/relationships/${encodeURIComponent(speakerId)}?${q.toString()}`,
+      "DELETE",
+    );
+    res.json(resp ?? { ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+}
+
+export function registerRelationships(router: Router): void {
+  router.get("/relationships", proxyListRelationships);
+  router.post("/relationships", proxyCreateRelationship);
+  router.patch("/relationships/:speakerId", proxyUpdateRelationship);
+  router.delete("/relationships/:speakerId", proxyDeleteRelationship);
+}

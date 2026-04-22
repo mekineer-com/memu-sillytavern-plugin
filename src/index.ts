@@ -16,6 +16,7 @@ import {
   registerScopeStorageProbe,
   registerLocalHealth,
   registerNarrativeSuggestion,
+  registerRelationships,
   getConnectionProfilesSummary,
   listModelsForProfile,
   externalServerPingInfo,
@@ -110,6 +111,7 @@ export async function init(router: Router): Promise<void> {
   registerScopeStorageProbe(router);
   registerMemorizeConversation(router);
   registerNarrativeSuggestion(router);
+  registerRelationships(router);
   registerLocalHealth(router);
 
   registerMetaEndpoints(router);

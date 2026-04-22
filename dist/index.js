@@ -23684,6 +23684,7 @@ async function init(router) {
     (0, memu_endpoint_1.registerScopeStorageProbe)(router);
     (0, memu_endpoint_1.registerMemorizeConversation)(router);
     (0, memu_endpoint_1.registerNarrativeSuggestion)(router);
+    (0, memu_endpoint_1.registerRelationships)(router);
     (0, memu_endpoint_1.registerLocalHealth)(router);
     registerMetaEndpoints(router);
     (0, memu_endpoint_1.registerServerControl)(router);
@@ -23748,6 +23749,11 @@ exports.registerScopeStorageProbe = registerScopeStorageProbe;
 exports.registerLocalHealth = registerLocalHealth;
 exports.proxyNarrativeSuggestion = proxyNarrativeSuggestion;
 exports.registerNarrativeSuggestion = registerNarrativeSuggestion;
+exports.proxyListRelationships = proxyListRelationships;
+exports.proxyCreateRelationship = proxyCreateRelationship;
+exports.proxyUpdateRelationship = proxyUpdateRelationship;
+exports.proxyDeleteRelationship = proxyDeleteRelationship;
+exports.registerRelationships = registerRelationships;
 const chalk_1 = __importDefault(__webpack_require__(/*! chalk */ "./node_modules/chalk/source/index.js"));
 const child_process_1 = __webpack_require__(/*! child_process */ "child_process");
 const crypto_1 = __importDefault(__webpack_require__(/*! crypto */ "crypto"));
@@ -25607,6 +25613,99 @@ async function proxyNarrativeSuggestion(req, res) {
 }
 function registerNarrativeSuggestion(router) {
     router.post("/narrativeSuggestion", proxyNarrativeSuggestion);
+}
+async function proxyListRelationships(req, res) {
+    const userId = String(req.query?.userId || "");
+    const soulId = String(req.query?.soulId || "");
+    if (!userId || !soulId) {
+        res.status(400).json({ error: "Missing userId/soulId" });
+        return;
+    }
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const q = new URLSearchParams();
+        q.set("user_id", userId);
+        const resp = await httpJson(srv.baseUrl, `/souls/${encodeURIComponent(soulId)}/relationships?${q.toString()}`, "GET");
+        res.json(resp ?? { relationships: [] });
+    }
+    catch (e) {
+        res.status(500).json({ error: e?.message || String(e) });
+    }
+}
+async function proxyCreateRelationship(req, res) {
+    const userId = String(req.body?.userId || "");
+    const soulId = String(req.body?.soulId || "");
+    const name = String(req.body?.name || "");
+    const relationship = String(req.body?.relationship || "");
+    if (!userId || !soulId || !name.trim()) {
+        res.status(400).json({ error: "Missing userId/soulId/name" });
+        return;
+    }
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const resp = await httpJson(srv.baseUrl, `/souls/${encodeURIComponent(soulId)}/relationships`, "POST", {
+            user_id: userId,
+            name,
+            relationship,
+        });
+        res.json(resp ?? {});
+    }
+    catch (e) {
+        res.status(500).json({ error: e?.message || String(e) });
+    }
+}
+async function proxyUpdateRelationship(req, res) {
+    const userId = String(req.body?.userId || "");
+    const soulId = String(req.body?.soulId || "");
+    const speakerId = String(req.params?.speakerId || "");
+    const name = req.body?.name;
+    const relationship = req.body?.relationship;
+    if (!userId || !soulId || !speakerId) {
+        res.status(400).json({ error: "Missing userId/soulId/speakerId" });
+        return;
+    }
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const body = { user_id: userId };
+        if (name !== undefined)
+            body.name = String(name);
+        if (relationship !== undefined)
+            body.relationship = String(relationship);
+        const resp = await httpJson(srv.baseUrl, `/souls/${encodeURIComponent(soulId)}/relationships/${encodeURIComponent(speakerId)}`, "PATCH", body);
+        res.json(resp ?? {});
+    }
+    catch (e) {
+        res.status(500).json({ error: e?.message || String(e) });
+    }
+}
+async function proxyDeleteRelationship(req, res) {
+    const userId = String(req.query?.userId || "");
+    const soulId = String(req.query?.soulId || "");
+    const speakerId = String(req.params?.speakerId || "");
+    if (!userId || !soulId || !speakerId) {
+        res.status(400).json({ error: "Missing userId/soulId/speakerId" });
+        return;
+    }
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const q = new URLSearchParams();
+        q.set("user_id", userId);
+        const resp = await httpJson(srv.baseUrl, `/souls/${encodeURIComponent(soulId)}/relationships/${encodeURIComponent(speakerId)}?${q.toString()}`, "DELETE");
+        res.json(resp ?? { ok: true });
+    }
+    catch (e) {
+        res.status(500).json({ error: e?.message || String(e) });
+    }
+}
+function registerRelationships(router) {
+    router.get("/relationships", proxyListRelationships);
+    router.post("/relationships", proxyCreateRelationship);
+    router.patch("/relationships/:speakerId", proxyUpdateRelationship);
+    router.delete("/relationships/:speakerId", proxyDeleteRelationship);
 }
 
 
