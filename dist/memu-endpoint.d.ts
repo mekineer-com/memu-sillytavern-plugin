@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
-type MemuStep = 'preprocess' | 'memory_extract' | 'category_update' | 'reflection' | 'ranking' | 'embeddings';
+type MemuStep = 'preprocess' | 'memory_extract' | 'category_update' | 'reflection' | 'ranking' | 'consolidation' | 'embeddings';
 interface MemuPluginConfig {
     version: number;
     defaultProfileId: string;

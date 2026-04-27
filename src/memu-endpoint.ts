@@ -22,6 +22,7 @@ type MemuStep =
   | 'category_update'
   | 'reflection'
   | 'ranking'
+  | 'consolidation'
   | 'embeddings';
 
 interface MemuPluginConfig {
@@ -136,6 +137,7 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
     "category_update",
     "reflection",
     "ranking",
+    "consolidation",
     "embeddings",
   ];
   const incoming =
@@ -933,7 +935,7 @@ function buildMemuPayloadForLocal(
 ): any {
 
   const step = (s: MemuStep): string => cfg.stepProfileId?.[s] || cfg.defaultProfileId || "default";
-  const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "ranking", "embeddings"];
+  const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "ranking", "consolidation", "embeddings"];
   const labelsById = new Map<string, string[]>();
   for (const s of steps) {
     const id = step(s);
@@ -1027,6 +1029,7 @@ function buildMemuPayloadForLocal(
     llm_profiles,
     memorize_config,
     retrieve_config,
+    consolidation_llm_profile: idToName(step("consolidation")),
   };
 
   if (conversation) payload.conversation = conversation;

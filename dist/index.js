@@ -23854,6 +23854,7 @@ function sanitizeIncomingConfig(obj) {
         "category_update",
         "reflection",
         "ranking",
+        "consolidation",
         "embeddings",
     ];
     const incoming = cfg.stepProfileId && typeof cfg.stepProfileId === "object"
@@ -24578,7 +24579,7 @@ function mapSTProviderToMemU(provider) {
 }
 function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) {
     const step = (s) => cfg.stepProfileId?.[s] || cfg.defaultProfileId || "default";
-    const steps = ["preprocess", "memory_extract", "category_update", "reflection", "ranking", "embeddings"];
+    const steps = ["preprocess", "memory_extract", "category_update", "reflection", "ranking", "consolidation", "embeddings"];
     const labelsById = new Map();
     for (const s of steps) {
         const id = step(s);
@@ -24668,6 +24669,7 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
         llm_profiles,
         memorize_config,
         retrieve_config,
+        consolidation_llm_profile: idToName(step("consolidation")),
     };
     if (conversation)
         payload.conversation = conversation;
