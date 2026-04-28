@@ -23,6 +23,7 @@ import {
   getPluginConfig,
   setPluginConfig,
   registerServerControl,
+  registerCancelMemorize,
 } from './memu-endpoint';
 
 interface PluginInfo {
@@ -104,6 +105,7 @@ export async function init(router: Router): Promise<void> {
 
   registerGetTaskStatus(router);
   registerGetTaskSummaryReady(router);
+  registerCancelMemorize(router);
   registerRetrieveDefaultCategories(router);
   registerConversationRetrieve(router);
   registerConversationTurn(router);

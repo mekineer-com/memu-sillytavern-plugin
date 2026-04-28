@@ -1488,7 +1488,7 @@ type LocalTaskStatus = "PENDING" | "PROCESSING" | "SUCCESS" | "FAILURE";
 
 const localTasks = new Map<
   string,
-  { status: LocalTaskStatus; createdAt: number; updatedAt: number; error?: string }
+  { status: LocalTaskStatus; createdAt: number; updatedAt: number; error?: string; batchTotal?: number; userId?: string; soulId?: string }
 >();
 
 const LOCAL_TASK_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -1552,7 +1552,7 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
   pruneLocalTasks();
 
   const taskId = makeTaskId();
-  localTasks.set(taskId, { status: "PENDING", createdAt: Date.now(), updatedAt: Date.now() });
+  localTasks.set(taskId, { status: "PENDING", createdAt: Date.now(), updatedAt: Date.now(), userId, soulId: characterId });
 
   // Fire and forget
   void (async () => {
@@ -1586,12 +1586,19 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
   const taskId = String(req.body?.taskId || "");
   const task = localTasks.get(taskId);
   if (!task) {
-    // Keep backward compatibility (status field) but provide a hint for debugging.
     res.json({ status: "FAILURE", error: "Unknown taskId" });
     return;
   }
-  // Include error (when present) to help diagnose local-mode failures.
-  res.json({ status: task.status, ...(task.error ? { error: task.error } : {}) });
+  let progress: { current?: number; total?: number } | undefined;
+  if (task.status === "PROCESSING" && task.userId && task.soulId) {
+    try {
+      const cfg = readPluginConfig();
+      const srv = await ensureLocalServer(cfg);
+      const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`, 'GET') as any;
+      if (p?.active) progress = { current: p.current, total: p.total };
+    } catch { /* progress is best-effort */ }
+  }
+  res.json({ status: task.status, ...(task.error ? { error: task.error } : {}), ...(progress ? { progress } : {}) });
 }
 
 export async function proxyGetTaskSummaryReady(req: Request, res: Response): Promise<void> {
@@ -1981,6 +1988,23 @@ export function registerGetTaskStatus(router: Router): void {
 
 export function registerGetTaskSummaryReady(router: Router): void {
   router.post("/getTaskSummaryReady", proxyGetTaskSummaryReady);
+}
+
+export async function proxyCancelMemorize(req: Request, res: Response): Promise<void> {
+  const userId = String(req.body?.userId || "");
+  const soulId = String(req.body?.soulId || "");
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const result = await httpJson(srv.baseUrl, '/memorize/cancel', 'POST', { user_id: userId, soul_id: soulId }) as any;
+    res.json(result ?? { ok: false });
+  } catch (e: any) {
+    res.json({ ok: false, error: e?.message || String(e) });
+  }
+}
+
+export function registerCancelMemorize(router: Router): void {
+  router.post("/cancelMemorize", proxyCancelMemorize);
 }
 
 export function registerRetrieveDefaultCategories(router: Router): void {
