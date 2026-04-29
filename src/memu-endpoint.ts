@@ -946,6 +946,24 @@ function buildMemuPayloadForLocal(
 
   const llm_profiles: Record<string, any> = {};
 
+  // Send the extension's default model as the "default" profile — covers turn and any
+  // step not individually mapped.
+  const defId = cfg.defaultProfileId;
+  if (defId) {
+    const defCred = resolveOrSkip(defId);
+    if (defCred) {
+      const defMapped = mapSTProviderToMemU(defCred.provider);
+      llm_profiles["default"] = {
+        provider: defMapped.provider,
+        base_url: defCred.baseUrl,
+        api_key: defCred.key,
+        chat_model: defCred.model,
+        client_backend: defMapped.client_backend,
+        ...(defMapped.provider_hint ? { provider_hint: defMapped.provider_hint } : {}),
+      };
+    }
+  }
+
   for (const s of steps) {
     const id = cfg.stepProfileId?.[s];
     if (!id) continue;
