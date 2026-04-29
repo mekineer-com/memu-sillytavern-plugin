@@ -934,43 +934,19 @@ function buildMemuPayloadForLocal(
   opts?: { characterName?: string; chatFileName?: string; conversationId?: string }
 ): any {
 
-  // Only send profiles the extension has explicitly configured.
-  // Server's config.json provides defaults for anything not sent.
+  // Profiles keyed by step name. Server's config.json provides defaults for anything not sent.
   const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "ranking", "consolidation", "embeddings"];
-  const idToName = (id: string) => `st_${safeFsName(id)}`;
 
-  const resolveOrSkip = (id: string): ReturnType<typeof resolveProfileCredentials> => {
+  function resolveOrSkip(id: string, step: string): ReturnType<typeof resolveProfileCredentials> {
     const cred = resolveProfileCredentials(id);
-    return (cred && cred.ok) ? cred : null;
-  };
-
-  const llm_profiles: Record<string, any> = {};
-
-  // Send the extension's default model as the "default" profile — covers turn and any
-  // step not individually mapped.
-  const defId = cfg.defaultProfileId;
-  if (defId) {
-    const defCred = resolveOrSkip(defId);
-    if (defCred) {
-      const defMapped = mapSTProviderToMemU(defCred.provider);
-      llm_profiles["default"] = {
-        provider: defMapped.provider,
-        base_url: defCred.baseUrl,
-        api_key: defCred.key,
-        chat_model: defCred.model,
-        client_backend: defMapped.client_backend,
-        ...(defMapped.provider_hint ? { provider_hint: defMapped.provider_hint } : {}),
-      };
-    }
+    if (cred && cred.ok) return cred;
+    console.warn(`memu: step '${step}' profile '${id}' not resolved, falling back to server default`);
+    return null;
   }
 
-  for (const s of steps) {
-    const id = cfg.stepProfileId?.[s];
-    if (!id) continue;
-    const cred = resolveOrSkip(id);
-    if (!cred) { console.warn(`memu: step '${s}' profile '${id}' not resolved, falling back to server default`); continue; }
+  function buildProfile(cred: NonNullable<ReturnType<typeof resolveProfileCredentials>>): any {
     const mapped = mapSTProviderToMemU(cred.provider);
-    const profile: any = {
+    return {
       provider: mapped.provider,
       base_url: cred.baseUrl,
       api_key: cred.key,
@@ -978,34 +954,43 @@ function buildMemuPayloadForLocal(
       client_backend: mapped.client_backend,
       ...(mapped.provider_hint ? { provider_hint: mapped.provider_hint } : {}),
     };
+  }
+
+  const llm_profiles: Record<string, any> = {};
+
+  if (cfg.defaultProfileId) {
+    const cred = resolveOrSkip(cfg.defaultProfileId, "default");
+    if (cred) llm_profiles["default"] = buildProfile(cred);
+  }
+
+  for (const s of steps) {
+    const id = cfg.stepProfileId?.[s];
+    if (!id) continue;
+    const cred = resolveOrSkip(id, s);
+    if (!cred) continue;
+    const profile = buildProfile(cred);
     if (s === "embeddings") {
       profile.embed_model = String((cfg as any).embeddingModelSelected || (cfg as any).embeddingModelManual || "").trim();
       profile.embed_batch_size = Number((cfg as any).embeddingBatchSize || 25);
+      llm_profiles["embedding"] = profile;
     }
-    llm_profiles[idToName(id)] = profile;
-  }
-
-  // If embeddings is configured, also register it under the "embedding" key the engine expects.
-  const embedId = cfg.stepProfileId?.["embeddings"];
-  if (embedId && llm_profiles[idToName(embedId)]) {
-    llm_profiles["embedding"] = llm_profiles[idToName(embedId)];
+    llm_profiles[s] = profile;
   }
 
   const memorize_config: any = {};
-  if (cfg.stepProfileId?.["preprocess"]) memorize_config.preprocess_llm_profile = idToName(cfg.stepProfileId["preprocess"]);
-  if (cfg.stepProfileId?.["memory_extract"]) memorize_config.memory_extract_llm_profile = idToName(cfg.stepProfileId["memory_extract"]);
-  if (cfg.stepProfileId?.["category_update"]) memorize_config.category_update_llm_profile = idToName(cfg.stepProfileId["category_update"]);
+  if (llm_profiles["preprocess"]) memorize_config.preprocess_llm_profile = "preprocess";
+  if (llm_profiles["memory_extract"]) memorize_config.memory_extract_llm_profile = "memory_extract";
+  if (llm_profiles["category_update"]) memorize_config.category_update_llm_profile = "category_update";
 
   const retrieve_config: any = {};
-  if (cfg.stepProfileId?.["reflection"]) retrieve_config.sufficiency_check_llm_profile = idToName(cfg.stepProfileId["reflection"]);
-  if (cfg.stepProfileId?.["ranking"]) retrieve_config.llm_ranking_llm_profile = idToName(cfg.stepProfileId["ranking"]);
+  if (llm_profiles["reflection"]) retrieve_config.sufficiency_check_llm_profile = "reflection";
+  if (llm_profiles["ranking"]) retrieve_config.llm_ranking_llm_profile = "ranking";
 
   const payload: any = {
     user: { user_id: userId, soul_id: characterId },
     ...(Object.keys(llm_profiles).length ? { llm_profiles } : {}),
     ...(Object.keys(memorize_config).length ? { memorize_config } : {}),
     ...(Object.keys(retrieve_config).length ? { retrieve_config } : {}),
-    ...(cfg.stepProfileId?.["consolidation"] ? { consolidation_llm_profile: idToName(cfg.stepProfileId["consolidation"]) } : {}),
   };
 
   if (conversation) payload.conversation = conversation;
