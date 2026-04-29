@@ -934,61 +934,25 @@ function buildMemuPayloadForLocal(
   opts?: { characterName?: string; chatFileName?: string; conversationId?: string }
 ): any {
 
-  const step = (s: MemuStep): string => cfg.stepProfileId?.[s] || cfg.defaultProfileId || "default";
+  // Only send profiles the extension has explicitly configured.
+  // Server's config.json provides defaults for anything not sent.
   const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "ranking", "consolidation", "embeddings"];
-  const labelsById = new Map<string, string[]>();
-  for (const s of steps) {
-    const id = step(s);
-    const labels = labelsById.get(id) || [];
-    labels.push(s);
-    labelsById.set(id, labels);
-  }
-  const resolveRequired = (id: string): NonNullable<ReturnType<typeof resolveProfileCredentials>> => {
+  const idToName = (id: string) => `st_${safeFsName(id)}`;
+
+  const resolveOrSkip = (id: string): ReturnType<typeof resolveProfileCredentials> => {
     const cred = resolveProfileCredentials(id);
-    if (cred && cred.ok) return cred;
-    const where = labelsById.get(id);
-    const usedBy = where && where.length ? `steps=${where.join(",")}` : "step=unknown";
-    const reason = cred?.message || `profile '${id}' not found`;
-    throw new Error(`Model Mapping invalid (${usedBy}, profile='${id}'): ${reason}`);
+    return (cred && cred.ok) ? cred : null;
   };
-
-  // Build unique set of needed profile ids (default + step overrides)
-  const needIds = new Set<string>();
-  for (const s of steps) needIds.add(step(s));
-
-  const idToName = (id: string) => (id === "default" ? "default" : `st_${safeFsName(id)}`);
 
   const llm_profiles: Record<string, any> = {};
 
-  // Provide "default" only when needed by step mapping.
-  const defId = cfg.defaultProfileId || "default";
-  const defaultReferencedBySteps = labelsById.has(defId);
-  let defCred: NonNullable<ReturnType<typeof resolveProfileCredentials>> | null = null;
-  if (defaultReferencedBySteps) {
-    defCred = resolveRequired(defId);
-  } else {
-    const maybeDef = resolveProfileCredentials(defId);
-    if (maybeDef && maybeDef.ok) defCred = maybeDef;
-  }
-  if (defCred) {
-    const defMapped = mapSTProviderToMemU(defCred.provider);
-    llm_profiles["default"] = {
-      provider: defMapped.provider,
-      base_url: defCred.baseUrl,
-      api_key: defCred.key,
-      chat_model: defCred.model,
-      client_backend: defMapped.client_backend,
-      ...(defMapped.provider_hint ? { provider_hint: defMapped.provider_hint } : {}),
-    };
-  }
-
-  // Populate step-specific profiles
-  for (const id of needIds) {
-    const name = idToName(id);
-    if (llm_profiles[name]) continue;
-    const cred = resolveRequired(id);
+  for (const s of steps) {
+    const id = cfg.stepProfileId?.[s];
+    if (!id) continue;
+    const cred = resolveOrSkip(id);
+    if (!cred) continue;
     const mapped = mapSTProviderToMemU(cred.provider);
-    llm_profiles[name] = {
+    const profile: any = {
       provider: mapped.provider,
       base_url: cred.baseUrl,
       api_key: cred.key,
@@ -996,40 +960,34 @@ function buildMemuPayloadForLocal(
       client_backend: mapped.client_backend,
       ...(mapped.provider_hint ? { provider_hint: mapped.provider_hint } : {}),
     };
+    if (s === "embeddings") {
+      profile.embed_model = String((cfg as any).embeddingModelSelected || (cfg as any).embeddingModelManual || "").trim();
+      profile.embed_batch_size = Number((cfg as any).embeddingBatchSize || 25);
+    }
+    llm_profiles[idToName(id)] = profile;
   }
 
-  // Embeddings: memU pipelines default to embed_llm_profile="embedding" in many steps.
-  const embedId = step("embeddings");
-  const embedCred = resolveRequired(embedId);
-  const embedMapped = mapSTProviderToMemU(embedCred.provider);
-  llm_profiles["embedding"] = {
-    provider: embedMapped.provider,
-    base_url: embedCred.baseUrl,
-    api_key: embedCred.key,
-    chat_model: embedCred.model,
-    client_backend: embedMapped.client_backend,
-    embed_model: String((cfg as any).embeddingModelSelected || (cfg as any).embeddingModelManual || "").trim(),
-    embed_batch_size: Number((cfg as any).embeddingBatchSize || 25),
-    ...(embedMapped.provider_hint ? { provider_hint: embedMapped.provider_hint } : {}),
-  };
+  // If embeddings is configured, also register it under the "embedding" key the engine expects.
+  const embedId = cfg.stepProfileId?.["embeddings"];
+  if (embedId && llm_profiles[idToName(embedId)]) {
+    llm_profiles["embedding"] = llm_profiles[idToName(embedId)];
+  }
 
-  const memorize_config: any = {
-    preprocess_llm_profile: idToName(step("preprocess")),
-    memory_extract_llm_profile: idToName(step("memory_extract")),
-    category_update_llm_profile: idToName(step("category_update")),
-  };
+  const memorize_config: any = {};
+  if (cfg.stepProfileId?.["preprocess"]) memorize_config.preprocess_llm_profile = idToName(cfg.stepProfileId["preprocess"]);
+  if (cfg.stepProfileId?.["memory_extract"]) memorize_config.memory_extract_llm_profile = idToName(cfg.stepProfileId["memory_extract"]);
+  if (cfg.stepProfileId?.["category_update"]) memorize_config.category_update_llm_profile = idToName(cfg.stepProfileId["category_update"]);
 
-  const retrieve_config: any = {
-    sufficiency_check_llm_profile: idToName(step("reflection")),
-    llm_ranking_llm_profile: idToName(step("ranking")),
-  };
+  const retrieve_config: any = {};
+  if (cfg.stepProfileId?.["reflection"]) retrieve_config.sufficiency_check_llm_profile = idToName(cfg.stepProfileId["reflection"]);
+  if (cfg.stepProfileId?.["ranking"]) retrieve_config.llm_ranking_llm_profile = idToName(cfg.stepProfileId["ranking"]);
 
   const payload: any = {
     user: { user_id: userId, soul_id: characterId },
-    llm_profiles,
-    memorize_config,
-    retrieve_config,
-    consolidation_llm_profile: idToName(step("consolidation")),
+    ...(Object.keys(llm_profiles).length ? { llm_profiles } : {}),
+    ...(Object.keys(memorize_config).length ? { memorize_config } : {}),
+    ...(Object.keys(retrieve_config).length ? { retrieve_config } : {}),
+    ...(cfg.stepProfileId?.["consolidation"] ? { consolidation_llm_profile: idToName(cfg.stepProfileId["consolidation"]) } : {}),
   };
 
   if (conversation) payload.conversation = conversation;
