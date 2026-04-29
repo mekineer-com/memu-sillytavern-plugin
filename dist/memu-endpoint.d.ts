@@ -88,6 +88,8 @@ export declare function proxyLocalHealth(_req: Request, res: Response): Promise<
 export declare function registerMemorizeConversation(router: Router): void;
 export declare function registerGetTaskStatus(router: Router): void;
 export declare function registerGetTaskSummaryReady(router: Router): void;
+export declare function proxyCancelMemorize(req: Request, res: Response): Promise<void>;
+export declare function registerCancelMemorize(router: Router): void;
 export declare function registerRetrieveDefaultCategories(router: Router): void;
 export declare function registerConversationRetrieve(router: Router): void;
 export declare function registerConversationTurn(router: Router): void;

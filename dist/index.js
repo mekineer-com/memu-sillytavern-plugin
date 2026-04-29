@@ -23677,6 +23677,7 @@ async function init(router) {
     router.use(express_1.default.json({ limit: '10mb' }));
     (0, memu_endpoint_1.registerGetTaskStatus)(router);
     (0, memu_endpoint_1.registerGetTaskSummaryReady)(router);
+    (0, memu_endpoint_1.registerCancelMemorize)(router);
     (0, memu_endpoint_1.registerRetrieveDefaultCategories)(router);
     (0, memu_endpoint_1.registerConversationRetrieve)(router);
     (0, memu_endpoint_1.registerConversationTurn)(router);
@@ -23741,6 +23742,8 @@ exports.proxyLocalHealth = proxyLocalHealth;
 exports.registerMemorizeConversation = registerMemorizeConversation;
 exports.registerGetTaskStatus = registerGetTaskStatus;
 exports.registerGetTaskSummaryReady = registerGetTaskSummaryReady;
+exports.proxyCancelMemorize = proxyCancelMemorize;
+exports.registerCancelMemorize = registerCancelMemorize;
 exports.registerRetrieveDefaultCategories = registerRetrieveDefaultCategories;
 exports.registerConversationRetrieve = registerConversationRetrieve;
 exports.registerConversationTurn = registerConversationTurn;
@@ -24578,61 +24581,24 @@ function mapSTProviderToMemU(provider) {
     return { provider: 'openai', client_backend: 'sdk', provider_hint: p };
 }
 function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) {
-    const step = (s) => cfg.stepProfileId?.[s] || cfg.defaultProfileId || "default";
+    // Only send profiles the extension has explicitly configured.
+    // Server's config.json provides defaults for anything not sent.
     const steps = ["preprocess", "memory_extract", "category_update", "reflection", "ranking", "consolidation", "embeddings"];
-    const labelsById = new Map();
-    for (const s of steps) {
-        const id = step(s);
-        const labels = labelsById.get(id) || [];
-        labels.push(s);
-        labelsById.set(id, labels);
-    }
-    const resolveRequired = (id) => {
+    const idToName = (id) => `st_${safeFsName(id)}`;
+    const resolveOrSkip = (id) => {
         const cred = resolveProfileCredentials(id);
-        if (cred && cred.ok)
-            return cred;
-        const where = labelsById.get(id);
-        const usedBy = where && where.length ? `steps=${where.join(",")}` : "step=unknown";
-        const reason = cred?.message || `profile '${id}' not found`;
-        throw new Error(`Model Mapping invalid (${usedBy}, profile='${id}'): ${reason}`);
+        return (cred && cred.ok) ? cred : null;
     };
-    // Build unique set of needed profile ids (default + step overrides)
-    const needIds = new Set();
-    for (const s of steps)
-        needIds.add(step(s));
-    const idToName = (id) => (id === "default" ? "default" : `st_${safeFsName(id)}`);
     const llm_profiles = {};
-    // Provide "default" only when needed by step mapping.
-    const defId = cfg.defaultProfileId || "default";
-    const defaultReferencedBySteps = labelsById.has(defId);
-    let defCred = null;
-    if (defaultReferencedBySteps) {
-        defCred = resolveRequired(defId);
-    }
-    else {
-        const maybeDef = resolveProfileCredentials(defId);
-        if (maybeDef && maybeDef.ok)
-            defCred = maybeDef;
-    }
-    if (defCred) {
-        const defMapped = mapSTProviderToMemU(defCred.provider);
-        llm_profiles["default"] = {
-            provider: defMapped.provider,
-            base_url: defCred.baseUrl,
-            api_key: defCred.key,
-            chat_model: defCred.model,
-            client_backend: defMapped.client_backend,
-            ...(defMapped.provider_hint ? { provider_hint: defMapped.provider_hint } : {}),
-        };
-    }
-    // Populate step-specific profiles
-    for (const id of needIds) {
-        const name = idToName(id);
-        if (llm_profiles[name])
+    for (const s of steps) {
+        const id = cfg.stepProfileId?.[s];
+        if (!id)
             continue;
-        const cred = resolveRequired(id);
+        const cred = resolveOrSkip(id);
+        if (!cred)
+            continue;
         const mapped = mapSTProviderToMemU(cred.provider);
-        llm_profiles[name] = {
+        const profile = {
             provider: mapped.provider,
             base_url: cred.baseUrl,
             api_key: cred.key,
@@ -24640,36 +24606,35 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
             client_backend: mapped.client_backend,
             ...(mapped.provider_hint ? { provider_hint: mapped.provider_hint } : {}),
         };
+        if (s === "embeddings") {
+            profile.embed_model = String(cfg.embeddingModelSelected || cfg.embeddingModelManual || "").trim();
+            profile.embed_batch_size = Number(cfg.embeddingBatchSize || 25);
+        }
+        llm_profiles[idToName(id)] = profile;
     }
-    // Embeddings: memU pipelines default to embed_llm_profile="embedding" in many steps.
-    const embedId = step("embeddings");
-    const embedCred = resolveRequired(embedId);
-    const embedMapped = mapSTProviderToMemU(embedCred.provider);
-    llm_profiles["embedding"] = {
-        provider: embedMapped.provider,
-        base_url: embedCred.baseUrl,
-        api_key: embedCred.key,
-        chat_model: embedCred.model,
-        client_backend: embedMapped.client_backend,
-        embed_model: String(cfg.embeddingModelSelected || cfg.embeddingModelManual || "").trim(),
-        embed_batch_size: Number(cfg.embeddingBatchSize || 25),
-        ...(embedMapped.provider_hint ? { provider_hint: embedMapped.provider_hint } : {}),
-    };
-    const memorize_config = {
-        preprocess_llm_profile: idToName(step("preprocess")),
-        memory_extract_llm_profile: idToName(step("memory_extract")),
-        category_update_llm_profile: idToName(step("category_update")),
-    };
-    const retrieve_config = {
-        sufficiency_check_llm_profile: idToName(step("reflection")),
-        llm_ranking_llm_profile: idToName(step("ranking")),
-    };
+    // If embeddings is configured, also register it under the "embedding" key the engine expects.
+    const embedId = cfg.stepProfileId?.["embeddings"];
+    if (embedId && llm_profiles[idToName(embedId)]) {
+        llm_profiles["embedding"] = llm_profiles[idToName(embedId)];
+    }
+    const memorize_config = {};
+    if (cfg.stepProfileId?.["preprocess"])
+        memorize_config.preprocess_llm_profile = idToName(cfg.stepProfileId["preprocess"]);
+    if (cfg.stepProfileId?.["memory_extract"])
+        memorize_config.memory_extract_llm_profile = idToName(cfg.stepProfileId["memory_extract"]);
+    if (cfg.stepProfileId?.["category_update"])
+        memorize_config.category_update_llm_profile = idToName(cfg.stepProfileId["category_update"]);
+    const retrieve_config = {};
+    if (cfg.stepProfileId?.["reflection"])
+        retrieve_config.sufficiency_check_llm_profile = idToName(cfg.stepProfileId["reflection"]);
+    if (cfg.stepProfileId?.["ranking"])
+        retrieve_config.llm_ranking_llm_profile = idToName(cfg.stepProfileId["ranking"]);
     const payload = {
         user: { user_id: userId, soul_id: characterId },
-        llm_profiles,
-        memorize_config,
-        retrieve_config,
-        consolidation_llm_profile: idToName(step("consolidation")),
+        ...(Object.keys(llm_profiles).length ? { llm_profiles } : {}),
+        ...(Object.keys(memorize_config).length ? { memorize_config } : {}),
+        ...(Object.keys(retrieve_config).length ? { retrieve_config } : {}),
+        ...(cfg.stepProfileId?.["consolidation"] ? { consolidation_llm_profile: idToName(cfg.stepProfileId["consolidation"]) } : {}),
     };
     if (conversation)
         payload.conversation = conversation;
@@ -25185,7 +25150,7 @@ async function proxyMemorizeConversation(req, res) {
     }
     pruneLocalTasks();
     const taskId = makeTaskId();
-    localTasks.set(taskId, { status: "PENDING", createdAt: Date.now(), updatedAt: Date.now() });
+    localTasks.set(taskId, { status: "PENDING", createdAt: Date.now(), updatedAt: Date.now(), userId, soulId: characterId });
     // Fire and forget
     void (async () => {
         try {
@@ -25208,6 +25173,18 @@ async function proxyMemorizeConversation(req, res) {
             });
             applyTimeZoneHints(payload, timeZone, timeZoneOffsetMin);
             await httpJson(srv.baseUrl, force ? '/memorize?force=true' : '/memorize', 'POST', payload);
+            // Server returns 202 immediately; batches run in background. Poll until done.
+            for (let i = 0; i < 300; i++) {
+                await new Promise(r => setTimeout(r, 3000));
+                try {
+                    const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(userId)}&soul_id=${encodeURIComponent(characterId)}`, 'GET');
+                    if (!p?.active)
+                        break;
+                }
+                catch {
+                    break;
+                }
+            }
             setTask(taskId, { status: 'SUCCESS' });
         }
         catch (e) {
@@ -25220,12 +25197,21 @@ async function proxyGetTaskStatus(req, res) {
     const taskId = String(req.body?.taskId || "");
     const task = localTasks.get(taskId);
     if (!task) {
-        // Keep backward compatibility (status field) but provide a hint for debugging.
         res.json({ status: "FAILURE", error: "Unknown taskId" });
         return;
     }
-    // Include error (when present) to help diagnose local-mode failures.
-    res.json({ status: task.status, ...(task.error ? { error: task.error } : {}) });
+    let progress;
+    if (task.status === "PROCESSING" && task.userId && task.soulId) {
+        try {
+            const cfg = readPluginConfig();
+            const srv = await ensureLocalServer(cfg);
+            const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`, 'GET');
+            if (p?.active)
+                progress = { current: p.current, total: p.total };
+        }
+        catch { /* progress is best-effort */ }
+    }
+    res.json({ status: task.status, ...(task.error ? { error: task.error } : {}), ...(progress ? { progress } : {}) });
 }
 async function proxyGetTaskSummaryReady(req, res) {
     const taskId = String(req.body?.taskId || "");
@@ -25576,6 +25562,22 @@ function registerGetTaskStatus(router) {
 }
 function registerGetTaskSummaryReady(router) {
     router.post("/getTaskSummaryReady", proxyGetTaskSummaryReady);
+}
+async function proxyCancelMemorize(req, res) {
+    const userId = String(req.body?.userId || "");
+    const soulId = String(req.body?.soulId || "");
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const result = await httpJson(srv.baseUrl, '/memorize/cancel', 'POST', { user_id: userId, soul_id: soulId });
+        res.json(result ?? { ok: false });
+    }
+    catch (e) {
+        res.json({ ok: false, error: e?.message || String(e) });
+    }
+}
+function registerCancelMemorize(router) {
+    router.post("/cancelMemorize", proxyCancelMemorize);
 }
 function registerRetrieveDefaultCategories(router) {
     router.post("/retrieveDefaultCategories", proxyRetrieveDefaultCategories);
