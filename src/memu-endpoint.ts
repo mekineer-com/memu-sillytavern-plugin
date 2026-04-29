@@ -1573,6 +1573,14 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
       });
       applyTimeZoneHints(payload as any, timeZone, timeZoneOffsetMin);
       await httpJson(srv.baseUrl, force ? '/memorize?force=true' : '/memorize', 'POST', payload);
+      // Server returns 202 immediately; batches run in background. Poll until done.
+      for (let i = 0; i < 300; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+          const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(userId)}&soul_id=${encodeURIComponent(characterId)}`, 'GET') as any;
+          if (!p?.active) break;
+        } catch { break; }
+      }
       setTask(taskId, { status: 'SUCCESS' });
     } catch (e: any) {
       setTask(taskId, { status: "FAILURE", error: e?.message || String(e) });
