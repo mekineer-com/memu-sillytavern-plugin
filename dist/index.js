@@ -24595,8 +24595,10 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
         if (!id)
             continue;
         const cred = resolveOrSkip(id);
-        if (!cred)
+        if (!cred) {
+            console.warn(`memu: step '${s}' profile '${id}' not resolved, falling back to server default`);
             continue;
+        }
         const mapped = mapSTProviderToMemU(cred.provider);
         const profile = {
             provider: mapped.provider,
@@ -25174,16 +25176,29 @@ async function proxyMemorizeConversation(req, res) {
             applyTimeZoneHints(payload, timeZone, timeZoneOffsetMin);
             await httpJson(srv.baseUrl, force ? '/memorize?force=true' : '/memorize', 'POST', payload);
             // Server returns 202 immediately; batches run in background. Poll until done.
+            let completed = false;
+            let pollErr = null;
             for (let i = 0; i < 300; i++) {
                 await new Promise(r => setTimeout(r, 3000));
                 try {
                     const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(userId)}&soul_id=${encodeURIComponent(characterId)}`, 'GET');
-                    if (!p?.active)
+                    if (!p?.active) {
+                        completed = true;
                         break;
+                    }
                 }
-                catch {
-                    break;
+                catch (e) {
+                    pollErr = e?.message || String(e);
                 }
+            }
+            if (!completed) {
+                if (pollErr) {
+                    setTask(taskId, { status: "FAILURE", error: `Memorize progress polling failed: ${pollErr}` });
+                }
+                else {
+                    setTask(taskId, { status: "FAILURE", error: "Memorize progress polling timed out" });
+                }
+                return;
             }
             setTask(taskId, { status: 'SUCCESS' });
         }
