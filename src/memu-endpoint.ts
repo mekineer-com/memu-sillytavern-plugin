@@ -1618,8 +1618,8 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     res.status(400).json({ error: "Missing userId/soulId/conversationId" });
     return;
   }
-  if (method !== "rag" && method !== "llm") {
-    res.status(400).json({ error: "Invalid method (expected rag or llm)" });
+  if (method !== "rag") {
+    res.status(400).json({ error: "Invalid method (expected rag)" });
     return;
   }
   if (!query.trim() && (!queries || queries.length === 0)) {
