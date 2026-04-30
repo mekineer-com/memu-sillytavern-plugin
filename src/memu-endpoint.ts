@@ -1101,7 +1101,10 @@ function _getExternalLogFile(cfg: MemuPluginConfig): string | null {
   const rootAbs = path.resolve(root);
 
   const c = _readExternalServerConfig(root);
-  const logRaw = c && typeof (c as any).log_file === 'string' ? String((c as any).log_file).trim() : '';
+  const debugObj = c && typeof (c as any).debug === 'object' ? (c as any).debug : null;
+  const logRawDebug = debugObj && typeof debugObj.log_file === 'string' ? String(debugObj.log_file).trim() : '';
+  const logRawLegacy = c && typeof (c as any).log_file === 'string' ? String((c as any).log_file).trim() : '';
+  const logRaw = logRawDebug || logRawLegacy;
   if (logRaw) {
     const expanded = _expandTilde(logRaw);
     if (path.isAbsolute(expanded)) return expanded;
@@ -1134,56 +1137,27 @@ function _readLogTail(logPath: string | null, maxLines: number): string[] {
 }
 
 function spawnExternalServer(pythonExe: string, runPyPath: string, cfg?: MemuPluginConfig): void {
-  let logStream: fs.WriteStream | null = null;
-  let logPath: string | null = null;
-
   try {
-    logPath = cfg ? _getExternalLogFile(cfg) : null;
-    if (logPath) {
-      try { fs.mkdirSync(path.dirname(logPath), { recursive: true }); } catch { /* ignore */ }
-      try { logStream = fs.createWriteStream(logPath, { flags: 'a' }); } catch { logStream = null; }
-      try { logStream?.write(`\n--- start ${new Date().toISOString()} ---\n`); } catch { /* ignore */ }
-    }
-
     const child = spawn(pythonExe, [runPyPath], {
       cwd: path.dirname(runPyPath),
-      stdio: ['ignore', 'pipe', 'pipe'],
+      // run.py owns file logging; keep spawn detached and avoid duplicate piping.
+      stdio: ['ignore', 'ignore', 'ignore'],
       env: { ...process.env },
       detached: true,
     });
 
-    // Stream logs to file. Keep terminal output concise (state, not a firehose).
-    if (child && (child as any).stdout) {
-      try {
-        (child as any).stdout.on('data', (chunk: any) => {
-          try { logStream?.write(chunk); } catch { /* ignore */ }
-        });
-      } catch { /* ignore */ }
-    }
-    if (child && (child as any).stderr) {
-      try {
-        (child as any).stderr.on('data', (chunk: any) => {
-          try { logStream?.write(chunk); } catch { /* ignore */ }
-          // (stderr is still captured in the log file)
-        });
-      } catch { /* ignore */ }
-    }
-
     child.on('error', (e: any) => {
       const msg = e?.message ? String(e.message) : String(e);
       try { console.error(chalk.red(MODULE_NAME), 'Spawn failed:', msg); } catch { /* ignore */ }
-      try { logStream?.write(`\n[spawn error] ${msg}\n`); } catch { /* ignore */ }
     });
 
     child.unref();
     const childPid = (child && typeof (child as any).pid === 'number') ? (child as any).pid : null;
 
     try { console.log(chalk.gray(MODULE_NAME), `pid=${childPid || 'unknown'}`); } catch { /* ignore */ }
-    try { logStream?.write(`[spawned pid=${childPid || 'unknown'}]\n`); } catch { /* ignore */ }
   } catch (e: any) {
     const msg = e?.message ? String(e.message) : String(e);
     try { console.error(chalk.red(MODULE_NAME), 'Spawn failed:', msg); } catch { /* ignore */ }
-    try { logStream?.write(`\n[spawn error] ${msg}\n`); } catch { /* ignore */ }
   }
 }
 

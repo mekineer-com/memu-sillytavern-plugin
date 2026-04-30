@@ -24744,7 +24744,10 @@ function _getExternalLogFile(cfg) {
         return null;
     const rootAbs = path_1.default.resolve(root);
     const c = _readExternalServerConfig(root);
-    const logRaw = c && typeof c.log_file === 'string' ? String(c.log_file).trim() : '';
+    const debugObj = c && typeof c.debug === 'object' ? c.debug : null;
+    const logRawDebug = debugObj && typeof debugObj.log_file === 'string' ? String(debugObj.log_file).trim() : '';
+    const logRawLegacy = c && typeof c.log_file === 'string' ? String(c.log_file).trim() : '';
+    const logRaw = logRawDebug || logRawLegacy;
     if (logRaw) {
         const expanded = _expandTilde(logRaw);
         if (path_1.default.isAbsolute(expanded))
@@ -24780,64 +24783,18 @@ function _readLogTail(logPath, maxLines) {
     }
 }
 function spawnExternalServer(pythonExe, runPyPath, cfg) {
-    let logStream = null;
-    let logPath = null;
     try {
-        logPath = cfg ? _getExternalLogFile(cfg) : null;
-        if (logPath) {
-            try {
-                fs_1.default.mkdirSync(path_1.default.dirname(logPath), { recursive: true });
-            }
-            catch { /* ignore */ }
-            try {
-                logStream = fs_1.default.createWriteStream(logPath, { flags: 'a' });
-            }
-            catch {
-                logStream = null;
-            }
-            try {
-                logStream?.write(`\n--- start ${new Date().toISOString()} ---\n`);
-            }
-            catch { /* ignore */ }
-        }
         const child = (0, child_process_1.spawn)(pythonExe, [runPyPath], {
             cwd: path_1.default.dirname(runPyPath),
-            stdio: ['ignore', 'pipe', 'pipe'],
+            // run.py owns file logging; keep spawn detached and avoid duplicate piping.
+            stdio: ['ignore', 'ignore', 'ignore'],
             env: { ...process.env },
             detached: true,
         });
-        // Stream logs to file. Keep terminal output concise (state, not a firehose).
-        if (child && child.stdout) {
-            try {
-                child.stdout.on('data', (chunk) => {
-                    try {
-                        logStream?.write(chunk);
-                    }
-                    catch { /* ignore */ }
-                });
-            }
-            catch { /* ignore */ }
-        }
-        if (child && child.stderr) {
-            try {
-                child.stderr.on('data', (chunk) => {
-                    try {
-                        logStream?.write(chunk);
-                    }
-                    catch { /* ignore */ }
-                    // (stderr is still captured in the log file)
-                });
-            }
-            catch { /* ignore */ }
-        }
         child.on('error', (e) => {
             const msg = e?.message ? String(e.message) : String(e);
             try {
                 console.error(chalk_1.default.red(consts_1.MODULE_NAME), 'Spawn failed:', msg);
-            }
-            catch { /* ignore */ }
-            try {
-                logStream?.write(`\n[spawn error] ${msg}\n`);
             }
             catch { /* ignore */ }
         });
@@ -24847,19 +24804,11 @@ function spawnExternalServer(pythonExe, runPyPath, cfg) {
             console.log(chalk_1.default.gray(consts_1.MODULE_NAME), `pid=${childPid || 'unknown'}`);
         }
         catch { /* ignore */ }
-        try {
-            logStream?.write(`[spawned pid=${childPid || 'unknown'}]\n`);
-        }
-        catch { /* ignore */ }
     }
     catch (e) {
         const msg = e?.message ? String(e.message) : String(e);
         try {
             console.error(chalk_1.default.red(consts_1.MODULE_NAME), 'Spawn failed:', msg);
-        }
-        catch { /* ignore */ }
-        try {
-            logStream?.write(`\n[spawn error] ${msg}\n`);
         }
         catch { /* ignore */ }
     }
