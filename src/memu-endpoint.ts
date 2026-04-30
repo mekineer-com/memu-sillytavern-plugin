@@ -921,9 +921,9 @@ function mapSTProviderToMemU(provider: string): { provider: string; client_backe
     'lmstudio',
     'ollama',
   ]);
-  if (!p || openaiCompat.has(p)) return { provider: 'openai', client_backend: 'sdk' };
+  if (!p || openaiCompat.has(p)) return { provider: 'openai', client_backend: 'httpx' };
   // Fallback: keep behavior stable but retain a hint for debugging.
-  return { provider: 'openai', client_backend: 'sdk', provider_hint: p };
+  return { provider: 'openai', client_backend: 'httpx', provider_hint: p };
 }
 
 function buildMemuPayloadForLocal(

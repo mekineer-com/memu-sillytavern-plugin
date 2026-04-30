@@ -24576,9 +24576,9 @@ function mapSTProviderToMemU(provider) {
         'ollama',
     ]);
     if (!p || openaiCompat.has(p))
-        return { provider: 'openai', client_backend: 'sdk' };
+        return { provider: 'openai', client_backend: 'httpx' };
     // Fallback: keep behavior stable but retain a hint for debugging.
-    return { provider: 'openai', client_backend: 'sdk', provider_hint: p };
+    return { provider: 'openai', client_backend: 'httpx', provider_hint: p };
 }
 function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) {
     // Profiles keyed by step name. Server's config.json provides defaults for anything not sent.
