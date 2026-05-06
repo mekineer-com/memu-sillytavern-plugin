@@ -25094,6 +25094,8 @@ async function proxyMemorizeConversation(req, res) {
     const conversation = req.body?.conversation;
     const forceRaw = req.query?.force ?? req.body?.force;
     const force = forceRaw === true || String(forceRaw || "").trim().toLowerCase() === "true";
+    const tailRaw = req.query?.tail ?? req.body?.tail;
+    const tail = tailRaw === true || String(tailRaw || "").trim().toLowerCase() === "true";
     const timeZone = String(req.body?.timeZone || "").trim();
     const timeZoneOffsetMinRaw = req.body?.timeZoneOffsetMin;
     const timeZoneOffsetMin = Number.isFinite(Number(timeZoneOffsetMinRaw)) ? Number(timeZoneOffsetMinRaw) : undefined;
@@ -25125,7 +25127,8 @@ async function proxyMemorizeConversation(req, res) {
                 conversationId,
             });
             applyTimeZoneHints(payload, timeZone, timeZoneOffsetMin);
-            await httpJson(srv.baseUrl, force ? '/memorize?force=true' : '/memorize', 'POST', payload);
+            const qs = force ? '?force=true' : tail ? '?tail=true' : '';
+            await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
             // Server returns 202 immediately; batches run in background. Poll until done.
             let completed = false;
             let pollErr = null;
