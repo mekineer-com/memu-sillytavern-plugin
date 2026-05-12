@@ -25227,6 +25227,7 @@ async function proxyConversationRetrieve(req, res) {
     const userId = String(req.body?.userId || "");
     const soulId = String(req.body?.soulId || "");
     const conversationId = String(req.body?.conversationId || "");
+    const userName = String(req.body?.userName || "").trim();
     const method = String(req.body?.method || "").trim().toLowerCase();
     const query = String(req.body?.query || "");
     const queries = Array.isArray(req.body?.queries) ? req.body.queries : undefined;
@@ -25251,6 +25252,9 @@ async function proxyConversationRetrieve(req, res) {
         payload.user = { user_id: userId, soul_id: soulId };
         payload.method = method;
         payload.query = query;
+        if (userName) {
+            payload.user_name = userName;
+        }
         if (queries && queries.length > 0) {
             payload.queries = queries;
         }
@@ -25283,6 +25287,7 @@ async function proxyConversationTurn(req, res) {
     const userId = String(req.body?.userId || "");
     const soulId = String(req.body?.soulId || "");
     const conversationId = String(req.body?.conversationId || "");
+    const userName = String(req.body?.userName || "").trim();
     const message = String(req.body?.message || "");
     const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
     const applyTurnMaintenance = req.body?.applyTurnMaintenance;
@@ -25309,6 +25314,8 @@ async function proxyConversationTurn(req, res) {
         });
         payload.user = { user_id: userId, soul_id: soulId };
         payload.message = message;
+        if (userName)
+            payload.user_name = userName;
         if (history && history.length > 0)
             payload.history = history;
         if (applyTurnMaintenance !== undefined)

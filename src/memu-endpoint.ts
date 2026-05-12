@@ -1613,6 +1613,7 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
   const userId = String(req.body?.userId || "");
   const soulId = String(req.body?.soulId || "");
   const conversationId = String(req.body?.conversationId || "");
+  const userName = String(req.body?.userName || "").trim();
   const method = String(req.body?.method || "").trim().toLowerCase();
   const query = String(req.body?.query || "");
   const queries = Array.isArray(req.body?.queries) ? req.body.queries : undefined;
@@ -1640,6 +1641,9 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     payload.user = { user_id: userId, soul_id: soulId };
     payload.method = method;
     payload.query = query;
+    if (userName) {
+      payload.user_name = userName;
+    }
     if (queries && queries.length > 0) {
       payload.queries = queries;
     }
@@ -1678,6 +1682,7 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
   const userId = String(req.body?.userId || "");
   const soulId = String(req.body?.soulId || "");
   const conversationId = String(req.body?.conversationId || "");
+  const userName = String(req.body?.userName || "").trim();
   const message = String(req.body?.message || "");
   const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
   const applyTurnMaintenance = req.body?.applyTurnMaintenance;
@@ -1707,6 +1712,7 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
 
     payload.user = { user_id: userId, soul_id: soulId };
     payload.message = message;
+    if (userName) payload.user_name = userName;
     if (history && history.length > 0) payload.history = history;
     if (applyTurnMaintenance !== undefined) payload.apply_turn_maintenance = !!applyTurnMaintenance;
     if (dryRun !== undefined) payload.dry_run = !!dryRun;
