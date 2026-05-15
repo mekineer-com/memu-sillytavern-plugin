@@ -25046,8 +25046,10 @@ async function httpJson(baseUrl, urlPath, method, body) {
     return parsed;
 }
 const localTasks = new Map();
-const LOCAL_TASK_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const LOCAL_TASK_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 const LOCAL_TASK_MAX = 200;
+const MEMORIZE_PROGRESS_POLL_INTERVAL_MS = 3000;
+const MEMORIZE_PROGRESS_MAX_POLLS = 1200; // 60 minutes @ 3s
 function pruneLocalTasks(now = Date.now()) {
     // Drop old tasks first (keeps memory bounded even if something never polls).
     const cutoff = now - LOCAL_TASK_TTL_MS;
@@ -25132,8 +25134,8 @@ async function proxyMemorizeConversation(req, res) {
             // Server returns 202 immediately; batches run in background. Poll until done.
             let completed = false;
             let pollErr = null;
-            for (let i = 0; i < 300; i++) {
-                await new Promise(r => setTimeout(r, 3000));
+            for (let i = 0; i < MEMORIZE_PROGRESS_MAX_POLLS; i++) {
+                await new Promise(r => setTimeout(r, MEMORIZE_PROGRESS_POLL_INTERVAL_MS));
                 try {
                     const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(userId)}&soul_id=${encodeURIComponent(characterId)}`, 'GET');
                     if (!p?.active) {
