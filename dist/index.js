@@ -25175,8 +25175,10 @@ async function proxyGetTaskStatus(req, res) {
             const cfg = readPluginConfig();
             const srv = await ensureLocalServer(cfg);
             const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`, 'GET');
-            if (p?.active)
-                progress = { current: p.current, total: p.total };
+            if (p?.active) {
+                const phase = typeof p.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
+                progress = { current: p.current, total: p.total, ...(phase ? { phase } : {}) };
+            }
         }
         catch { /* progress is best-effort */ }
     }

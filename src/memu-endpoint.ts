@@ -1550,13 +1550,16 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
     res.json({ status: "FAILURE", error: "Unknown taskId" });
     return;
   }
-  let progress: { current?: number; total?: number } | undefined;
+  let progress: { current?: number; total?: number; phase?: string } | undefined;
   if (task.status === "PROCESSING" && task.userId && task.soulId) {
     try {
       const cfg = readPluginConfig();
       const srv = await ensureLocalServer(cfg);
       const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`, 'GET') as any;
-      if (p?.active) progress = { current: p.current, total: p.total };
+      if (p?.active) {
+        const phase = typeof p.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
+        progress = { current: p.current, total: p.total, ...(phase ? { phase } : {}) };
+      }
     } catch { /* progress is best-effort */ }
   }
   res.json({ status: task.status, ...(task.error ? { error: task.error } : {}), ...(progress ? { progress } : {}) });
