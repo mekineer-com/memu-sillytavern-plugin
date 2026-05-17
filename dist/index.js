@@ -25232,6 +25232,8 @@ async function proxyConversationRetrieve(req, res) {
     const soulId = String(req.body?.soulId || "");
     const conversationId = String(req.body?.conversationId || "");
     const userName = String(req.body?.userName || "").trim();
+    const chatName = String(req.body?.chatName || "").trim();
+    const chatType = String(req.body?.chatType || "").trim();
     const method = String(req.body?.method || "").trim().toLowerCase();
     const query = String(req.body?.query || "");
     const queries = Array.isArray(req.body?.queries) ? req.body.queries : undefined;
@@ -25258,6 +25260,12 @@ async function proxyConversationRetrieve(req, res) {
         payload.query = query;
         if (userName) {
             payload.user_name = userName;
+        }
+        if (chatName) {
+            payload.chat_name = chatName;
+        }
+        if (chatType) {
+            payload.chat_type = chatType;
         }
         if (queries && queries.length > 0) {
             payload.queries = queries;
@@ -25292,6 +25300,8 @@ async function proxyConversationTurn(req, res) {
     const soulId = String(req.body?.soulId || "");
     const conversationId = String(req.body?.conversationId || "");
     const userName = String(req.body?.userName || "").trim();
+    const chatName = String(req.body?.chatName || "").trim();
+    const chatType = String(req.body?.chatType || "").trim();
     const message = String(req.body?.message || "");
     const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
     const applyTurnMaintenance = req.body?.applyTurnMaintenance;
@@ -25320,6 +25330,10 @@ async function proxyConversationTurn(req, res) {
         payload.message = message;
         if (userName)
             payload.user_name = userName;
+        if (chatName)
+            payload.chat_name = chatName;
+        if (chatType)
+            payload.chat_type = chatType;
         if (history && history.length > 0)
             payload.history = history;
         if (applyTurnMaintenance !== undefined)
