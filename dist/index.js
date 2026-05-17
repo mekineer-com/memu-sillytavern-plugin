@@ -24669,26 +24669,21 @@ function getExternalServerBaseUrl(_cfg) {
     if (raw)
         return raw.replace(/\/$/, '');
     // If the user provided a serverPath, prefer reading host/port from that server's config.json.
-    try {
-        const root = String(_cfg.serverPath || '').trim();
-        if (root) {
-            const cfgPath = path_1.default.join(root, 'config.json');
-            if (fs_1.default.existsSync(cfgPath)) {
-                const txt = fs_1.default.readFileSync(cfgPath, 'utf8');
-                const parsed = txt ? JSON.parse(txt) : null;
-                const listen = parsed && typeof parsed === 'object' ? parsed.listen : null;
-                const hostRaw = listen && typeof listen.host === 'string' ? String(listen.host) : '';
-                const portRaw = listen && (typeof listen.port === 'number' || typeof listen.port === 'string') ? String(listen.port) : '';
-                const port = portRaw && /^\d+$/.test(portRaw) ? parseInt(portRaw, 10) : 0;
-                // If server binds to 0.0.0.0, the client should use loopback.
-                const host = hostRaw === '0.0.0.0' ? '127.0.0.1' : (hostRaw || '127.0.0.1');
-                if (port > 0)
-                    return `http://${host}:${port}`;
+    const root = String(_cfg.serverPath || '').trim();
+    if (root) {
+        const cfg = _readExternalServerConfig(root);
+        const listen = cfg && typeof cfg.listen === 'object' ? cfg.listen : null;
+        if (listen) {
+            const hostRaw = typeof listen.host === 'string' ? String(listen.host).trim() : '';
+            const portRaw = (typeof listen.port === 'number' || typeof listen.port === 'string') ? String(listen.port).trim() : '';
+            const port = portRaw && /^\d+$/.test(portRaw) ? parseInt(portRaw, 10) : 0;
+            if (!hostRaw || port <= 0) {
+                throw new Error(`Invalid listen host/port in ${path_1.default.join(root, 'config.json')}`);
             }
+            // If server binds to 0.0.0.0, the client should use loopback.
+            const host = hostRaw === '0.0.0.0' ? '127.0.0.1' : hostRaw;
+            return `http://${host}:${port}`;
         }
-    }
-    catch {
-        // ignore and fall back
     }
     return 'http://127.0.0.1:8099';
 }
@@ -24705,17 +24700,24 @@ function _expandTilde(pth) {
     return pth.startsWith('~/') ? path_1.default.join(home, pth.slice(2)) : (pth === '~' ? home : pth);
 }
 function _readExternalServerConfig(root) {
-    try {
-        const cfgPath = path_1.default.join(root, 'config.json');
-        if (!fs_1.default.existsSync(cfgPath))
-            return null;
-        const txt = fs_1.default.readFileSync(cfgPath, 'utf8');
-        const parsed = txt ? JSON.parse(txt) : null;
-        return parsed && typeof parsed === 'object' ? parsed : null;
-    }
-    catch {
+    const cfgPath = path_1.default.join(root, 'config.json');
+    if (!fs_1.default.existsSync(cfgPath)) {
         return null;
     }
+    const txt = fs_1.default.readFileSync(cfgPath, 'utf8');
+    let parsed = null;
+    try {
+        parsed = txt ? JSON.parse(txt) : null;
+    }
+    catch (err) {
+        throw new Error(`Invalid JSON in ${cfgPath}: ${err?.message || String(err)}`);
+    }
+    if (parsed === null)
+        return null;
+    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(`Invalid root object in ${cfgPath}: expected JSON object`);
+    }
+    return parsed;
 }
 function getExternalServerPython(cfg) {
     const root = String(cfg.serverPath || '').trim();
