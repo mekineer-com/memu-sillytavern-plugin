@@ -1024,7 +1024,6 @@ function buildMemuPayloadForLocal(
 // Local MCP/HTTP server (FastAPI)
 // ---------------------------------
 
-let _localServerSessionId: string | null = null;
 let _externalSpawnCooldownUntilUnixMs: number = 0;
 
 // External server identity (read from /health). Used by the UI extension to detect restarts.
@@ -1115,9 +1114,7 @@ function _getExternalLogFile(cfg: MemuPluginConfig): string | null {
 
   const c = _readExternalServerConfig(root);
   const debugObj = c && typeof (c as any).debug === 'object' ? (c as any).debug : null;
-  const logRawDebug = debugObj && typeof debugObj.log_file === 'string' ? String(debugObj.log_file).trim() : '';
-  const logRawLegacy = c && typeof (c as any).log_file === 'string' ? String((c as any).log_file).trim() : '';
-  const logRaw = logRawDebug || logRawLegacy;
+  const logRaw = debugObj && typeof debugObj.log_file === 'string' ? String(debugObj.log_file).trim() : '';
   if (logRaw) {
     const expanded = _expandTilde(logRaw);
     if (path.isAbsolute(expanded)) return expanded;
@@ -1231,8 +1228,6 @@ async function ensureLocalServer(
       throw new Error("mcp-memu-server is not healthy (autoStartServer=false)");
     }
   }
-
-  if (!_localServerSessionId) _localServerSessionId = 'external-' + Date.now() + '-' + Math.random().toString(16).slice(2);
 
   let host = '127.0.0.1';
   let port = 0;
@@ -1650,20 +1645,14 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
   const userName = String(req.body?.userName || "").trim();
   const chatName = String(req.body?.chatName || "").trim();
   const chatType = String(req.body?.chatType || "").trim();
-  const method = String(req.body?.method || "").trim().toLowerCase();
   const query = String(req.body?.query || "");
-  const queries = Array.isArray(req.body?.queries) ? req.body.queries : undefined;
 
   if (!userId || !soulId || !conversationId) {
     res.status(400).json({ error: "Missing userId/soulId/conversationId" });
     return;
   }
-  if (method !== "rag") {
-    res.status(400).json({ error: "Invalid method (expected rag)" });
-    return;
-  }
-  if (!query.trim() && (!queries || queries.length === 0)) {
-    res.status(400).json({ error: "Missing query or queries" });
+  if (!query.trim()) {
+    res.status(400).json({ error: "Missing query" });
     return;
   }
 
@@ -1675,7 +1664,7 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     });
 
     payload.user = { user_id: userId, soul_id: soulId };
-    payload.method = method;
+    payload.method = "rag";
     payload.query = query;
     if (userName) {
       payload.user_name = userName;
@@ -1685,9 +1674,6 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     }
     if (chatType) {
       payload.chat_type = chatType;
-    }
-    if (queries && queries.length > 0) {
-      payload.queries = queries;
     }
     const retrieveConfig = (payload.retrieve_config && typeof payload.retrieve_config === 'object')
       ? { ...payload.retrieve_config }
