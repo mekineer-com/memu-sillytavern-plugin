@@ -111,12 +111,23 @@ function readJsonCached(filePath: string, ttlMs: number = 2000): any | null {
       return prev.value;
     }
     const raw = fs.readFileSync(filePath, 'utf8');
-    const value = raw && raw.trim() ? JSON.parse(raw) : null;
+    let value: any | null = null;
+    if (raw && raw.trim()) {
+      try {
+        value = JSON.parse(raw);
+      } catch (e: any) {
+        const msg = e?.message ? String(e.message) : String(e);
+        throw new Error(`Failed to parse JSON file '${filePath}': ${msg}`);
+      }
+    }
     _jsonCache.set(filePath, { at: now, mtimeMs, value, missing: false });
     return value;
-  } catch {
-    _jsonCache.set(filePath, { at: now, mtimeMs: 0, value: null, missing: true });
-    return null;
+  } catch (e: any) {
+    if (e && typeof e === 'object' && 'code' in e && String((e as any).code) === 'ENOENT') {
+      _jsonCache.set(filePath, { at: now, mtimeMs: 0, value: null, missing: true });
+      return null;
+    }
+    throw e;
   }
 }
 function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
@@ -937,11 +948,10 @@ function buildMemuPayloadForLocal(
   // Profiles keyed by step name. Server's config.json provides defaults for anything not sent.
   const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "ranking", "consolidation", "embeddings"];
 
-  function resolveOrSkip(id: string, step: string): ReturnType<typeof resolveProfileCredentials> {
+  function resolveOrSkip(id: string, step: string): NonNullable<ReturnType<typeof resolveProfileCredentials>> {
     const cred = resolveProfileCredentials(id);
     if (cred && cred.ok) return cred;
-    console.warn(`memu: step '${step}' profile '${id}' not resolved, falling back to server default`);
-    return null;
+    throw new Error(`memu: step '${step}' profile '${id}' could not be resolved`);
   }
 
   function buildProfile(cred: NonNullable<ReturnType<typeof resolveProfileCredentials>>): any {
@@ -960,14 +970,13 @@ function buildMemuPayloadForLocal(
 
   if (cfg.defaultProfileId) {
     const cred = resolveOrSkip(cfg.defaultProfileId, "default");
-    if (cred) llm_profiles["default"] = buildProfile(cred);
+    llm_profiles["default"] = buildProfile(cred);
   }
 
   for (const s of steps) {
     const id = cfg.stepProfileId?.[s];
     if (!id) continue;
     const cred = resolveOrSkip(id, s);
-    if (!cred) continue;
     const profile = buildProfile(cred);
     if (s === "embeddings") {
       profile.embed_model = String((cfg as any).embeddingModelSelected || (cfg as any).embeddingModelManual || "").trim();
@@ -1231,8 +1240,9 @@ async function ensureLocalServer(
     const u = new URL(baseUrl);
     host = u.hostname || host;
     port = u.port ? parseInt(u.port, 10) : (u.protocol === 'https:' ? 443 : 80);
-  } catch {
-    // ignore
+  } catch (e: any) {
+    const msg = e?.message ? String(e.message) : String(e);
+    throw new Error(`MEMU_SERVER_URL is not a valid URL: ${baseUrl} (${msg})`);
   }
 
   return { baseUrl, host, port };
@@ -1312,7 +1322,7 @@ export async function externalServerStatus(): Promise<{ ok: boolean; running: bo
   }
 }
 
-export async function externalServerPingInfo(): Promise<{ ok: boolean; serverInstanceId?: string | null; ephemeralDb?: boolean | null }> {
+export async function externalServerPingInfo(): Promise<{ ok: boolean; serverInstanceId?: string | null; ephemeralDb?: boolean | null; error?: string }> {
   try {
     const cfg = readPluginConfig();
     const baseUrl = getExternalServerBaseUrl(cfg);
@@ -1322,11 +1332,13 @@ export async function externalServerPingInfo(): Promise<{ ok: boolean; serverIns
       serverInstanceId: healthInfo.serverInstanceId ?? _externalServerInstanceId,
       ephemeralDb: healthInfo.ephemeralDb ?? _externalServerEphemeralDb,
     };
-  } catch {
+  } catch (e: any) {
+    const msg = e?.message ? String(e.message) : String(e);
     return {
-      ok: true,
+      ok: false,
       serverInstanceId: _externalServerInstanceId,
       ephemeralDb: _externalServerEphemeralDb,
+      error: msg,
     };
   }
 }
@@ -1585,37 +1597,42 @@ export async function proxyRetrieveDefaultCategories(req: Request, res: Response
     return;
   }
 
-  const cfg = readPluginConfig();
-  let srv: any = null;
+  try {
+    const cfg = readPluginConfig();
+    let srv: any = null;
 
-  const payloadBase = buildMemuPayloadForLocal(cfg, userId, characterId, undefined);
+    const payloadBase = buildMemuPayloadForLocal(cfg, userId, characterId, undefined);
 
-  let storedCats: any[] = [];
-  srv = await ensureLocalServer(cfg);
-  // POST /categories/search uses _get_service_from_payload() (API keys from ST profiles).
-  const payload = payloadBase;
-  payload.user = { user_id: userId, soul_id: characterId };
-  const resp: any = await httpJson(srv.baseUrl, '/categories/search', 'POST', payload);
-  storedCats = Array.isArray(resp?.categories) ? resp.categories : [];
+    let storedCats: any[] = [];
+    srv = await ensureLocalServer(cfg);
+    // POST /categories/search uses _get_service_from_payload() (API keys from ST profiles).
+    const payload = payloadBase;
+    payload.user = { user_id: userId, soul_id: characterId };
+    const resp: any = await httpJson(srv.baseUrl, '/categories/search', 'POST', payload);
+    storedCats = Array.isArray(resp?.categories) ? resp.categories : [];
 
-  const out: any[] = [];
-  const seen = new Set<string>();
-  for (const c of storedCats) {
-    const nm = String(c?.name || '').trim();
-    const summary = String(c?.summary || '').trim();
-    if (!nm || !summary) continue;
-    const key = nm.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ ...c, name: nm, summary });
+    const out: any[] = [];
+    const seen = new Set<string>();
+    for (const c of storedCats) {
+      const nm = String(c?.name || '').trim();
+      const summary = String(c?.summary || '').trim();
+      if (!nm || !summary) continue;
+      const key = nm.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...c, name: nm, summary });
+    }
+
+    if (!_loggedDefaultCategories) {
+      console.log(chalk.gray(MODULE_NAME), 'retrieveDefaultCategories: stored=', out.length, 'backend=server');
+      _loggedDefaultCategories = true;
+    }
+
+    res.json({ categories: out });
+  } catch (e: any) {
+    const msg = e?.message ? String(e.message) : String(e);
+    res.status(502).json({ error: msg });
   }
-
-  if (!_loggedDefaultCategories) {
-    console.log(chalk.gray(MODULE_NAME), 'retrieveDefaultCategories: stored=', out.length, 'backend=server');
-    _loggedDefaultCategories = true;
-  }
-
-  res.json({ categories: out });
 }
 
 export async function proxyConversationRetrieve(req: Request, res: Response): Promise<void> {

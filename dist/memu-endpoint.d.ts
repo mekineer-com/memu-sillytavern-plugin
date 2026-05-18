@@ -64,6 +64,7 @@ export declare function externalServerPingInfo(): Promise<{
     ok: boolean;
     serverInstanceId?: string | null;
     ephemeralDb?: boolean | null;
+    error?: string;
 }>;
 export declare function externalServerStart(): Promise<{
     ok: boolean;
