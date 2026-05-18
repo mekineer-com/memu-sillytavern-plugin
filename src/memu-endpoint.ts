@@ -1327,6 +1327,14 @@ export async function externalServerPingInfo(): Promise<{ ok: boolean; serverIns
     const cfg = readPluginConfig();
     const baseUrl = getExternalServerBaseUrl(cfg);
     const healthInfo = await _externalServerHealthInfo(baseUrl);
+    if (!healthInfo.healthy) {
+      return {
+        ok: false,
+        serverInstanceId: healthInfo.serverInstanceId ?? _externalServerInstanceId,
+        ephemeralDb: healthInfo.ephemeralDb ?? _externalServerEphemeralDb,
+        error: `external server health check failed: ${baseUrl}/health`,
+      };
+    }
     return {
       ok: true,
       serverInstanceId: healthInfo.serverInstanceId ?? _externalServerInstanceId,
