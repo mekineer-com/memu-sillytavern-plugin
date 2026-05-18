@@ -23618,15 +23618,17 @@ const consts_1 = __webpack_require__(/*! ./consts */ "./src/consts.ts");
 const memu_endpoint_1 = __webpack_require__(/*! ./memu-endpoint */ "./src/memu-endpoint.ts");
 function registerMetaEndpoints(router) {
     router.get('/ping', async (_req, res) => {
-        let serverInstanceId = null;
-        let ephemeralDb = null;
-        try {
-            const st = await (0, memu_endpoint_1.externalServerPingInfo)();
-            serverInstanceId = (st && typeof st.serverInstanceId === 'string') ? st.serverInstanceId : null;
-            ephemeralDb = (st && typeof st.ephemeralDb === 'boolean') ? st.ephemeralDb : null;
-        }
-        catch {
-            // ignore
+        const st = await (0, memu_endpoint_1.externalServerPingInfo)();
+        const serverInstanceId = (st && typeof st.serverInstanceId === 'string') ? st.serverInstanceId : null;
+        const ephemeralDb = (st && typeof st.ephemeralDb === 'boolean') ? st.ephemeralDb : null;
+        if (!st?.ok) {
+            return res.status(503).json({
+                ok: false,
+                module: consts_1.MODULE_NAME,
+                error: String(st?.error || 'external server ping failed'),
+                ...(serverInstanceId ? { serverInstanceId } : {}),
+                ...(ephemeralDb !== null ? { ephemeralDb } : {}),
+            });
         }
         return res.json({
             ok: true,

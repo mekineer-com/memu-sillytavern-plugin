@@ -40,15 +40,17 @@ interface Plugin {
 
 function registerMetaEndpoints(router: Router) {
   router.get('/ping', async (_req: Request, res: Response) => {
-    let serverInstanceId: string | null = null;
-    let ephemeralDb: boolean | null = null;
-
-    try {
-      const st = await externalServerPingInfo();
-      serverInstanceId = (st && typeof (st as any).serverInstanceId === 'string') ? (st as any).serverInstanceId : null;
-      ephemeralDb = (st && typeof (st as any).ephemeralDb === 'boolean') ? (st as any).ephemeralDb : null;
-    } catch {
-      // ignore
+    const st = await externalServerPingInfo();
+    const serverInstanceId = (st && typeof (st as any).serverInstanceId === 'string') ? (st as any).serverInstanceId : null;
+    const ephemeralDb = (st && typeof (st as any).ephemeralDb === 'boolean') ? (st as any).ephemeralDb : null;
+    if (!st?.ok) {
+      return res.status(503).json({
+        ok: false,
+        module: MODULE_NAME,
+        error: String((st as any)?.error || 'external server ping failed'),
+        ...(serverInstanceId ? { serverInstanceId } : {}),
+        ...(ephemeralDb !== null ? { ephemeralDb } : {}),
+      });
     }
 
     return res.json({
