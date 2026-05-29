@@ -24669,7 +24669,6 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
 // ---------------------------------
 // Local MCP/HTTP server (FastAPI)
 // ---------------------------------
-let _localServerSessionId = null;
 let _externalSpawnCooldownUntilUnixMs = 0;
 // External server identity (read from /health). Used by the UI extension to detect restarts.
 let _externalServerInstanceId = null;
@@ -24757,9 +24756,7 @@ function _getExternalLogFile(cfg) {
     const rootAbs = path_1.default.resolve(root);
     const c = _readExternalServerConfig(root);
     const debugObj = c && typeof c.debug === 'object' ? c.debug : null;
-    const logRawDebug = debugObj && typeof debugObj.log_file === 'string' ? String(debugObj.log_file).trim() : '';
-    const logRawLegacy = c && typeof c.log_file === 'string' ? String(c.log_file).trim() : '';
-    const logRaw = logRawDebug || logRawLegacy;
+    const logRaw = debugObj && typeof debugObj.log_file === 'string' ? String(debugObj.log_file).trim() : '';
     if (logRaw) {
         const expanded = _expandTilde(logRaw);
         if (path_1.default.isAbsolute(expanded))
@@ -24880,8 +24877,6 @@ async function ensureLocalServer(cfg, opts = {}) {
             throw new Error("mcp-memu-server is not healthy (autoStartServer=false)");
         }
     }
-    if (!_localServerSessionId)
-        _localServerSessionId = 'external-' + Date.now() + '-' + Math.random().toString(16).slice(2);
     let host = '127.0.0.1';
     let port = 0;
     try {
@@ -25106,6 +25101,12 @@ function applyTimeZoneHints(payload, timeZone, timeZoneOffsetMin) {
     if (timeZoneOffsetMin !== undefined)
         payload.time_zone_offset_min = timeZoneOffsetMin;
 }
+async function isConsolidationInProgress(baseUrl, conversationId, soulId, userId) {
+    if (!conversationId || !soulId || !userId)
+        return false;
+    const st = await httpJson(baseUrl, `/conversation/${encodeURIComponent(conversationId)}/state?soul_id=${encodeURIComponent(soulId)}&user_id=${encodeURIComponent(userId)}`, 'GET');
+    return (st?.state?.consolidation_in_progress) === true;
+}
 async function proxyMemorizeConversation(req, res) {
     const userId = String(req.body?.userId || "");
     const conversationId = String(req.body?.conversationId || "");
@@ -25130,7 +25131,14 @@ async function proxyMemorizeConversation(req, res) {
     }
     pruneLocalTasks();
     const taskId = makeTaskId();
-    localTasks.set(taskId, { status: "PENDING", createdAt: Date.now(), updatedAt: Date.now(), userId, soulId: characterId });
+    localTasks.set(taskId, {
+        status: "PENDING",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        userId,
+        soulId: characterId,
+        conversationId,
+    });
     // Fire and forget
     void (async () => {
         try {
@@ -25162,6 +25170,17 @@ async function proxyMemorizeConversation(req, res) {
                 try {
                     const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(userId)}&soul_id=${encodeURIComponent(characterId)}`, 'GET');
                     if (!p?.active) {
+                        if (conversationId) {
+                            try {
+                                if (await isConsolidationInProgress(srv.baseUrl, conversationId, characterId, userId)) {
+                                    continue;
+                                }
+                            }
+                            catch (e) {
+                                pollErr = `consolidation state read failed: ${String(e?.message || e)}`;
+                                continue;
+                            }
+                        }
                         completed = true;
                         break;
                     }
@@ -25194,25 +25213,54 @@ async function proxyGetTaskStatus(req, res) {
         res.json({ status: "FAILURE", error: "Unknown taskId" });
         return;
     }
+    let status = task.status;
     let progress;
-    if (task.status === "PROCESSING" && task.userId && task.soulId) {
+    if ((task.status === "PROCESSING" || task.status === "SUCCESS") && task.userId && task.soulId) {
         try {
             const cfg = readPluginConfig();
             const srv = await ensureLocalServer(cfg);
             const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`, 'GET');
             if (p?.active) {
+                status = "PROCESSING";
                 const phase = typeof p.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
                 progress = { current: p.current, total: p.total, ...(phase ? { phase } : {}) };
+            }
+            else if (await isConsolidationInProgress(srv.baseUrl, task.conversationId, task.soulId, task.userId)) {
+                status = "PROCESSING";
+                progress = { current: 1, total: 1, phase: "consolidation" };
             }
         }
         catch { /* progress is best-effort */ }
     }
-    res.json({ status: task.status, ...(task.error ? { error: task.error } : {}), ...(progress ? { progress } : {}) });
+    res.json({ status, ...(task.error ? { error: task.error } : {}), ...(progress ? { progress } : {}) });
 }
 async function proxyGetTaskSummaryReady(req, res) {
     const taskId = String(req.body?.taskId || "");
     const task = localTasks.get(taskId);
-    res.json({ allReady: task?.status === "SUCCESS" });
+    if (!task) {
+        res.json({ allReady: false });
+        return;
+    }
+    if (task.status !== "SUCCESS") {
+        res.json({ allReady: false });
+        return;
+    }
+    if (!task.userId || !task.soulId) {
+        res.json({ allReady: true });
+        return;
+    }
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const inProgress = await isConsolidationInProgress(srv.baseUrl, task.conversationId, task.soulId, task.userId);
+        res.json({ allReady: !inProgress });
+        return;
+    }
+    catch (e) {
+        warnOnce(`getTaskSummaryReady:${taskId}`, `state read failed while checking consolidation for task ${taskId}: ${String(e?.message || e)}`, 30000);
+        res.json({ allReady: false });
+        return;
+    }
 }
 async function proxyRetrieveDefaultCategories(req, res) {
     const userId = String(req.body?.userId || "");
@@ -25263,19 +25311,13 @@ async function proxyConversationRetrieve(req, res) {
     const userName = String(req.body?.userName || "").trim();
     const chatName = String(req.body?.chatName || "").trim();
     const chatType = String(req.body?.chatType || "").trim();
-    const method = String(req.body?.method || "").trim().toLowerCase();
     const query = String(req.body?.query || "");
-    const queries = Array.isArray(req.body?.queries) ? req.body.queries : undefined;
     if (!userId || !soulId || !conversationId) {
         res.status(400).json({ error: "Missing userId/soulId/conversationId" });
         return;
     }
-    if (method !== "rag") {
-        res.status(400).json({ error: "Invalid method (expected rag)" });
-        return;
-    }
-    if (!query.trim() && (!queries || queries.length === 0)) {
-        res.status(400).json({ error: "Missing query or queries" });
+    if (!query.trim()) {
+        res.status(400).json({ error: "Missing query" });
         return;
     }
     try {
@@ -25285,7 +25327,7 @@ async function proxyConversationRetrieve(req, res) {
             conversationId,
         });
         payload.user = { user_id: userId, soul_id: soulId };
-        payload.method = method;
+        payload.method = "rag";
         payload.query = query;
         if (userName) {
             payload.user_name = userName;
@@ -25295,9 +25337,6 @@ async function proxyConversationRetrieve(req, res) {
         }
         if (chatType) {
             payload.chat_type = chatType;
-        }
-        if (queries && queries.length > 0) {
-            payload.queries = queries;
         }
         const retrieveConfig = (payload.retrieve_config && typeof payload.retrieve_config === 'object')
             ? { ...payload.retrieve_config }

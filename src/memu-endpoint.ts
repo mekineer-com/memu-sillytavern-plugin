@@ -1442,7 +1442,16 @@ type LocalTaskStatus = "PENDING" | "PROCESSING" | "SUCCESS" | "FAILURE";
 
 const localTasks = new Map<
   string,
-  { status: LocalTaskStatus; createdAt: number; updatedAt: number; error?: string; batchTotal?: number; userId?: string; soulId?: string }
+  {
+    status: LocalTaskStatus;
+    createdAt: number;
+    updatedAt: number;
+    error?: string;
+    batchTotal?: number;
+    userId?: string;
+    soulId?: string;
+    conversationId?: string;
+  }
 >();
 
 const LOCAL_TASK_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
@@ -1483,6 +1492,21 @@ function applyTimeZoneHints(payload: any, timeZone: string, timeZoneOffsetMin: n
   if (timeZoneOffsetMin !== undefined) payload.time_zone_offset_min = timeZoneOffsetMin;
 }
 
+async function isConsolidationInProgress(
+  baseUrl: string,
+  conversationId: string | undefined,
+  soulId: string | undefined,
+  userId: string | undefined,
+): Promise<boolean> {
+  if (!conversationId || !soulId || !userId) return false;
+  const st = await httpJson(
+    baseUrl,
+    `/conversation/${encodeURIComponent(conversationId)}/state?soul_id=${encodeURIComponent(soulId)}&user_id=${encodeURIComponent(userId)}`,
+    'GET',
+  ) as any;
+  return (st?.state?.consolidation_in_progress) === true;
+}
+
 export async function proxyMemorizeConversation(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
   const conversationId = String(req.body?.conversationId || "");
@@ -1510,7 +1534,14 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
   pruneLocalTasks();
 
   const taskId = makeTaskId();
-  localTasks.set(taskId, { status: "PENDING", createdAt: Date.now(), updatedAt: Date.now(), userId, soulId: characterId });
+  localTasks.set(taskId, {
+    status: "PENDING",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    userId,
+    soulId: characterId,
+    conversationId,
+  });
 
   // Fire and forget
   void (async () => {
@@ -1540,6 +1571,16 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
         try {
           const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(userId)}&soul_id=${encodeURIComponent(characterId)}`, 'GET') as any;
           if (!p?.active) {
+            if (conversationId) {
+              try {
+                if (await isConsolidationInProgress(srv.baseUrl, conversationId, characterId, userId)) {
+                  continue;
+                }
+              } catch (e: any) {
+                pollErr = `consolidation state read failed: ${String(e?.message || e)}`;
+                continue;
+              }
+            }
             completed = true;
             break;
           }
@@ -1571,25 +1612,56 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
     res.json({ status: "FAILURE", error: "Unknown taskId" });
     return;
   }
+  let status = task.status;
   let progress: { current?: number; total?: number; phase?: string } | undefined;
-  if (task.status === "PROCESSING" && task.userId && task.soulId) {
+  if ((task.status === "PROCESSING" || task.status === "SUCCESS") && task.userId && task.soulId) {
     try {
       const cfg = readPluginConfig();
       const srv = await ensureLocalServer(cfg);
       const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`, 'GET') as any;
       if (p?.active) {
+        status = "PROCESSING";
         const phase = typeof p.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
         progress = { current: p.current, total: p.total, ...(phase ? { phase } : {}) };
+      } else if (await isConsolidationInProgress(srv.baseUrl, task.conversationId, task.soulId, task.userId)) {
+        status = "PROCESSING";
+        progress = { current: 1, total: 1, phase: "consolidation" };
       }
     } catch { /* progress is best-effort */ }
   }
-  res.json({ status: task.status, ...(task.error ? { error: task.error } : {}), ...(progress ? { progress } : {}) });
+  res.json({ status, ...(task.error ? { error: task.error } : {}), ...(progress ? { progress } : {}) });
 }
 
 export async function proxyGetTaskSummaryReady(req: Request, res: Response): Promise<void> {
   const taskId = String(req.body?.taskId || "");
   const task = localTasks.get(taskId);
-  res.json({ allReady: task?.status === "SUCCESS" });
+  if (!task) {
+    res.json({ allReady: false });
+    return;
+  }
+  if (task.status !== "SUCCESS") {
+    res.json({ allReady: false });
+    return;
+  }
+  if (!task.userId || !task.soulId) {
+    res.json({ allReady: true });
+    return;
+  }
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const inProgress = await isConsolidationInProgress(srv.baseUrl, task.conversationId, task.soulId, task.userId);
+    res.json({ allReady: !inProgress });
+    return;
+  } catch (e: any) {
+    warnOnce(
+      `getTaskSummaryReady:${taskId}`,
+      `state read failed while checking consolidation for task ${taskId}: ${String(e?.message || e)}`,
+      30_000,
+    );
+    res.json({ allReady: false });
+    return;
+  }
 }
 
 export async function proxyRetrieveDefaultCategories(req: Request, res: Response): Promise<void> {
