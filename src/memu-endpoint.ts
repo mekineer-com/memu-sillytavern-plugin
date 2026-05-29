@@ -1450,11 +1450,6 @@ const localTasks = new Map<
     batchTotal?: number;
     userId?: string;
     soulId?: string;
-    conversationId?: string;
-    inactiveNoConsolidationSeen?: boolean;
-    expectMemorizeWork?: boolean;
-    sawMemorizeActive?: boolean;
-    memorizeAccepted?: boolean;
   }
 >();
 
@@ -1487,10 +1482,6 @@ function setTask(
     status: LocalTaskStatus;
     updatedAt: number;
     error?: string;
-    inactiveNoConsolidationSeen?: boolean;
-    expectMemorizeWork?: boolean;
-    sawMemorizeActive?: boolean;
-    memorizeAccepted?: boolean;
   }>,
 ) {
   const prev = localTasks.get(taskId);
@@ -1502,21 +1493,6 @@ function setTask(
 function applyTimeZoneHints(payload: any, timeZone: string, timeZoneOffsetMin: number | undefined): void {
   if (timeZone) payload.time_zone = timeZone;
   if (timeZoneOffsetMin !== undefined) payload.time_zone_offset_min = timeZoneOffsetMin;
-}
-
-async function isConsolidationInProgress(
-  baseUrl: string,
-  conversationId: string | undefined,
-  soulId: string | undefined,
-  userId: string | undefined,
-): Promise<boolean> {
-  if (!conversationId || !soulId || !userId) return false;
-  const st = await httpJson(
-    baseUrl,
-    `/conversation/${encodeURIComponent(conversationId)}/state?soul_id=${encodeURIComponent(soulId)}&user_id=${encodeURIComponent(userId)}`,
-    'GET',
-  ) as any;
-  return (st?.state?.consolidation_in_progress) === true;
 }
 
 export async function proxyMemorizeConversation(req: Request, res: Response): Promise<void> {
@@ -1552,11 +1528,6 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
     updatedAt: Date.now(),
     userId,
     soulId: characterId,
-    conversationId,
-    inactiveNoConsolidationSeen: false,
-    expectMemorizeWork: false,
-    sawMemorizeActive: false,
-    memorizeAccepted: false,
   });
 
   // Fire and forget
@@ -1578,14 +1549,7 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
       });
       applyTimeZoneHints(payload as any, timeZone, timeZoneOffsetMin);
       const qs = force ? '?force=true' : tail ? '?tail=true' : '';
-      const out = await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
-      const segCount = Number((out as any)?.segment_count);
-      setTask(taskId, {
-        memorizeAccepted: true,
-        expectMemorizeWork: Number.isFinite(segCount) && segCount > 0,
-        sawMemorizeActive: false,
-      });
-      // Completion is determined by getTaskStatus using server progress+consolidation state.
+      await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
     } catch (e: any) {
       setTask(taskId, { status: "FAILURE", error: e?.message || String(e) });
     }
@@ -1601,52 +1565,54 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
     res.json({ status: "FAILURE", error: "Unknown taskId" });
     return;
   }
-  let status = task.status;
-  let progress: { current?: number; total?: number; phase?: string } | undefined;
-  if (task.status === "PROCESSING" && task.userId && task.soulId) {
-    if (!task.memorizeAccepted) {
-      res.json({ status, ...(task.error ? { error: task.error } : {}) });
-      return;
-    }
+  if (task.status === "SUCCESS" || task.status === "FAILURE") {
+    res.json({ status: task.status, ...(task.error ? { error: task.error } : {}) });
+    return;
+  }
+  if (task.userId && task.soulId) {
     try {
       const cfg = readPluginConfig();
       const srv = await ensureLocalServer(cfg);
-      const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`, 'GET') as any;
-      if (p?.active) {
-        status = "PROCESSING";
-        const phase = typeof p.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
-        progress = { current: p.current, total: p.total, ...(phase ? { phase } : {}) };
-        const patch: Parameters<typeof setTask>[1] = {
-          inactiveNoConsolidationSeen: false,
-        };
-        if (!task.sawMemorizeActive) {
-          patch.sawMemorizeActive = true;
-        }
-        setTask(taskId, patch);
-      } else if (await isConsolidationInProgress(srv.baseUrl, task.conversationId, task.soulId, task.userId)) {
-        status = "PROCESSING";
-        progress = { current: 1, total: 1, phase: "consolidation" };
-        setTask(taskId, { inactiveNoConsolidationSeen: false });
-      } else if (task.expectMemorizeWork && !task.sawMemorizeActive) {
-        // /memorize accepted segments but progress has not appeared yet; stay processing.
-        status = "PROCESSING";
-        setTask(taskId, { inactiveNoConsolidationSeen: false });
-      } else if (!task.inactiveNoConsolidationSeen) {
-        status = "PROCESSING";
-        setTask(taskId, { inactiveNoConsolidationSeen: true });
-      } else {
-        status = "SUCCESS";
-        setTask(taskId, {
-          status: "SUCCESS",
-          error: undefined,
-          inactiveNoConsolidationSeen: false,
-          sawMemorizeActive: false,
-          expectMemorizeWork: false,
-        });
+      const p = await httpJson(
+        srv.baseUrl,
+        `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`,
+        'GET',
+      ) as any;
+      if (p?.active === true) {
+        setTask(taskId, { status: "PROCESSING", error: undefined });
+        const phase = typeof p?.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
+        const current = Number(p?.current);
+        const total = Number(p?.total);
+        const progress = Number.isFinite(current) && Number.isFinite(total)
+          ? { current, total, ...(phase ? { phase } : {}) }
+          : undefined;
+        res.json({ status: "PROCESSING", ...(progress ? { progress } : {}) });
+        return;
       }
-    } catch { /* progress is best-effort */ }
+      const lastResult = String(p?.last_result || "").trim().toLowerCase();
+      if (lastResult === "success" || lastResult === "nothing_to_memorize") {
+        setTask(taskId, { status: "SUCCESS", error: undefined });
+        res.json({ status: "SUCCESS" });
+        return;
+      }
+      if (lastResult === "failure" || lastResult === "cancelled") {
+        const err = String(p?.error || (lastResult === "cancelled" ? "cancelled" : "Memorize failed")).trim();
+        setTask(taskId, { status: "FAILURE", error: err });
+        res.json({ status: "FAILURE", error: err });
+        return;
+      }
+      // No terminal marker yet: keep processing.
+      setTask(taskId, { status: "PROCESSING" });
+      res.json({ status: "PROCESSING" });
+      return;
+    } catch (e: any) {
+      const err = String(e?.message || e || "").trim() || "Task status polling failed";
+      setTask(taskId, { status: "FAILURE", error: err });
+      res.json({ status: "FAILURE", error: err });
+      return;
+    }
   }
-  res.json({ status, ...(task.error ? { error: task.error } : {}), ...(progress ? { progress } : {}) });
+  res.json({ status: task.status, ...(task.error ? { error: task.error } : {}) });
 }
 
 export async function proxyRetrieveDefaultCategories(req: Request, res: Response): Promise<void> {
