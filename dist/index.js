@@ -24227,9 +24227,11 @@ function resolveProfileBaseUrl(p, n, allProfiles) {
             }
         }
     }
-    if (_openaiCompatProviders.has(provider))
-        return _stProviderUrls[provider] || null;
-    return null;
+    // Providers with non-OpenAI-compatible APIs — fail fast rather than sending wrong payload.
+    const incompatible = new Set(['claude', 'cohere', 'vertexai', 'makersuite', 'azure_openai', 'ai21']);
+    if (incompatible.has(provider))
+        return null;
+    return _stProviderUrls[provider] || null;
 }
 function findProfileById(profiles, id) {
     for (const p of profiles) {
