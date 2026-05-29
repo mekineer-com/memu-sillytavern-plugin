@@ -31,8 +31,14 @@ const _stProviderUrls: Record<string, string> = (() => {
         || Object.entries(apiConsts).find(([k]) => k.startsWith(csKey))?.[1];
       if (url) map[providerName] = url;
     }
+    if (Object.keys(map).length === 0) {
+      console.warn('[memu] could not parse ST provider URLs — profiles without explicit base_url will fail');
+    }
     return map;
-  } catch { return {}; }
+  } catch {
+    console.warn('[memu] could not read ST source files for provider URL resolution');
+    return {};
+  }
 })();
 
 const _warnOnceAt = new Map<string, number>();
@@ -530,7 +536,8 @@ function resolveProfileBaseUrl(
     }
   }
 
-  return _stProviderUrls[provider] || null;
+  if (_openaiCompatProviders.has(provider)) return _stProviderUrls[provider] || null;
+  return null;
 }
 
 function findProfileById(profiles: AnyObject[], id: string): AnyObject | null {
@@ -938,30 +945,29 @@ function sanitizeScopedDbFilename(v: string): string {
 
 let _loggedDefaultCategories = false;
 
+const _openaiCompatProviders = new Set([
+  'openai',
+  'openai-compatible',
+  'openai_compatible',
+  'openrouter',
+  'nanogpt',
+  'groq',
+  'together',
+  'togetherai',
+  'mistral',
+  'mistralai',
+  'deepseek',
+  'xai',
+  'perplexity',
+  'custom',
+  'vllm',
+  'lmstudio',
+  'ollama',
+]);
+
 function mapSTProviderToMemU(provider: string): { provider: string; client_backend: string; provider_hint?: string } {
   const p = String(provider || '').trim().toLowerCase();
-  // Treat common ST providers as OpenAI-compatible in local mode.
-  // (memU local backends are wired for OpenAI-style base_url + api_key.)
-  const openaiCompat = new Set([
-    'openai',
-    'openai-compatible',
-    'openai_compatible',
-    'openrouter',
-    'nanogpt',
-    'groq',
-    'together',
-    'togetherai',
-    'mistral',
-    'deepseek',
-    'xai',
-    'perplexity',
-    'custom',
-    'vllm',
-    'lmstudio',
-    'ollama',
-  ]);
-  if (!p || openaiCompat.has(p)) return { provider: 'openai', client_backend: 'httpx' };
-  // Fallback: keep behavior stable but retain a hint for debugging.
+  if (!p || _openaiCompatProviders.has(p)) return { provider: 'openai', client_backend: 'httpx' };
   return { provider: 'openai', client_backend: 'httpx', provider_hint: p };
 }
 
