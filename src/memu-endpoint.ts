@@ -1452,6 +1452,9 @@ const localTasks = new Map<
     soulId?: string;
     conversationId?: string;
     inactiveNoConsolidationSeen?: boolean;
+    expectMemorizeWork?: boolean;
+    sawMemorizeActive?: boolean;
+    memorizeAccepted?: boolean;
   }
 >();
 
@@ -1480,7 +1483,15 @@ function makeTaskId(): string {
 
 function setTask(
   taskId: string,
-  patch: Partial<{ status: LocalTaskStatus; updatedAt: number; error?: string; inactiveNoConsolidationSeen?: boolean }>,
+  patch: Partial<{
+    status: LocalTaskStatus;
+    updatedAt: number;
+    error?: string;
+    inactiveNoConsolidationSeen?: boolean;
+    expectMemorizeWork?: boolean;
+    sawMemorizeActive?: boolean;
+    memorizeAccepted?: boolean;
+  }>,
 ) {
   const prev = localTasks.get(taskId);
   if (!prev) return;
@@ -1543,6 +1554,9 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
     soulId: characterId,
     conversationId,
     inactiveNoConsolidationSeen: false,
+    expectMemorizeWork: false,
+    sawMemorizeActive: false,
+    memorizeAccepted: false,
   });
 
   // Fire and forget
@@ -1564,7 +1578,13 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
       });
       applyTimeZoneHints(payload as any, timeZone, timeZoneOffsetMin);
       const qs = force ? '?force=true' : tail ? '?tail=true' : '';
-      await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
+      const out = await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
+      const segCount = Number((out as any)?.segment_count);
+      setTask(taskId, {
+        memorizeAccepted: true,
+        expectMemorizeWork: Number.isFinite(segCount) && segCount > 0,
+        sawMemorizeActive: false,
+      });
       // Completion is determined by getTaskStatus using server progress+consolidation state.
     } catch (e: any) {
       setTask(taskId, { status: "FAILURE", error: e?.message || String(e) });
@@ -1584,6 +1604,10 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
   let status = task.status;
   let progress: { current?: number; total?: number; phase?: string } | undefined;
   if (task.status === "PROCESSING" && task.userId && task.soulId) {
+    if (!task.memorizeAccepted) {
+      res.json({ status, ...(task.error ? { error: task.error } : {}) });
+      return;
+    }
     try {
       const cfg = readPluginConfig();
       const srv = await ensureLocalServer(cfg);
@@ -1592,21 +1616,33 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
         status = "PROCESSING";
         const phase = typeof p.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
         progress = { current: p.current, total: p.total, ...(phase ? { phase } : {}) };
-        if (task.inactiveNoConsolidationSeen) {
-          setTask(taskId, { inactiveNoConsolidationSeen: false });
+        const patch: Parameters<typeof setTask>[1] = {
+          inactiveNoConsolidationSeen: false,
+        };
+        if (!task.sawMemorizeActive) {
+          patch.sawMemorizeActive = true;
         }
+        setTask(taskId, patch);
       } else if (await isConsolidationInProgress(srv.baseUrl, task.conversationId, task.soulId, task.userId)) {
         status = "PROCESSING";
         progress = { current: 1, total: 1, phase: "consolidation" };
-        if (task.inactiveNoConsolidationSeen) {
-          setTask(taskId, { inactiveNoConsolidationSeen: false });
-        }
+        setTask(taskId, { inactiveNoConsolidationSeen: false });
+      } else if (task.expectMemorizeWork && !task.sawMemorizeActive) {
+        // /memorize accepted segments but progress has not appeared yet; stay processing.
+        status = "PROCESSING";
+        setTask(taskId, { inactiveNoConsolidationSeen: false });
       } else if (!task.inactiveNoConsolidationSeen) {
         status = "PROCESSING";
         setTask(taskId, { inactiveNoConsolidationSeen: true });
       } else {
         status = "SUCCESS";
-        setTask(taskId, { status: "SUCCESS", error: undefined, inactiveNoConsolidationSeen: false });
+        setTask(taskId, {
+          status: "SUCCESS",
+          error: undefined,
+          inactiveNoConsolidationSeen: false,
+          sawMemorizeActive: false,
+          expectMemorizeWork: false,
+        });
       }
     } catch { /* progress is best-effort */ }
   }
