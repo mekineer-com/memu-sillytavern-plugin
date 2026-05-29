@@ -23762,6 +23762,38 @@ const crypto_1 = __importDefault(__webpack_require__(/*! crypto */ "crypto"));
 const fs_1 = __importDefault(__webpack_require__(/*! fs */ "fs"));
 const path_1 = __importDefault(__webpack_require__(/*! path */ "path"));
 const consts_1 = __webpack_require__(/*! ./consts */ "./src/consts.ts");
+// Read ST's own provider→baseURL map at startup by parsing two ST source files:
+//   constants.js  → CHAT_COMPLETION_SOURCES  (provider enum, e.g. MISTRALAI: "mistralai")
+//   chat-completions.js → API_* constants     (URLs, e.g. API_MISTRAL = "https://...")
+// Cross-references them via shared prefix (MISTRALAI ↔ API_MISTRAL).
+const _stProviderUrls = (() => {
+    try {
+        const stRoot = path_1.default.resolve(__dirname, '../../..');
+        const ccSrc = fs_1.default.readFileSync(path_1.default.join(stRoot, 'src/endpoints/backends/chat-completions.js'), 'utf8');
+        const constSrc = fs_1.default.readFileSync(path_1.default.join(stRoot, 'src/constants.js'), 'utf8');
+        const apiConsts = {};
+        for (const m of ccSrc.matchAll(/^const\s+API_(\w+)\s*=\s*'([^']+)'/gm)) {
+            apiConsts[m[1]] = m[2];
+        }
+        const csMatch = constSrc.match(/CHAT_COMPLETION_SOURCES\s*=\s*\{([^}]+)\}/s);
+        if (!csMatch)
+            return {};
+        const map = {};
+        for (const m of csMatch[1].matchAll(/(\w+)\s*:\s*'([^']+)'/g)) {
+            const csKey = m[1]; // e.g. MISTRALAI
+            const providerName = m[2]; // e.g. "mistralai"
+            const url = apiConsts[csKey]
+                || Object.entries(apiConsts).find(([k]) => csKey.startsWith(k))?.[1]
+                || Object.entries(apiConsts).find(([k]) => k.startsWith(csKey))?.[1];
+            if (url)
+                map[providerName] = url;
+        }
+        return map;
+    }
+    catch {
+        return {};
+    }
+})();
 const _warnOnceAt = new Map();
 function warnOnce(key, msg, ttlMs = 30000) {
     const now = Date.now();
@@ -24191,7 +24223,7 @@ function resolveProfileBaseUrl(p, n, allProfiles) {
             }
         }
     }
-    return null;
+    return _stProviderUrls[provider] || null;
 }
 function findProfileById(profiles, id) {
     for (const p of profiles) {
@@ -25060,16 +25092,17 @@ async function httpJson(baseUrl, urlPath, method, body) {
     }
     return parsed;
 }
+// ---------------------------------
+// Local task routing cache
+// ---------------------------------
 const localTasks = new Map();
 const LOCAL_TASK_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 const LOCAL_TASK_MAX = 200;
-const MEMORIZE_PROGRESS_POLL_INTERVAL_MS = 3000;
-const MEMORIZE_PROGRESS_MAX_POLLS = 1200; // 60 minutes @ 3s
 function pruneLocalTasks(now = Date.now()) {
     // Drop old tasks first (keeps memory bounded even if something never polls).
     const cutoff = now - LOCAL_TASK_TTL_MS;
     for (const [id, t] of localTasks) {
-        if ((t.updatedAt || t.createdAt) < cutoff)
+        if (t.createdAt < cutoff)
             localTasks.delete(id);
     }
     // If still too many, drop oldest by createdAt (Map preserves insertion order,
@@ -25085,24 +25118,11 @@ function pruneLocalTasks(now = Date.now()) {
 function makeTaskId() {
     return crypto_1.default.randomUUID ? crypto_1.default.randomUUID() : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
-function setTask(taskId, patch) {
-    const prev = localTasks.get(taskId);
-    if (!prev)
-        return;
-    localTasks.set(taskId, { ...prev, ...patch, updatedAt: Date.now() });
-    pruneLocalTasks();
-}
 function applyTimeZoneHints(payload, timeZone, timeZoneOffsetMin) {
     if (timeZone)
         payload.time_zone = timeZone;
     if (timeZoneOffsetMin !== undefined)
         payload.time_zone_offset_min = timeZoneOffsetMin;
-}
-async function isConsolidationInProgress(baseUrl, conversationId, soulId, userId) {
-    if (!conversationId || !soulId || !userId)
-        return false;
-    const st = await httpJson(baseUrl, `/conversation/${encodeURIComponent(conversationId)}/state?soul_id=${encodeURIComponent(soulId)}&user_id=${encodeURIComponent(userId)}`, 'GET');
-    return (st?.state?.consolidation_in_progress) === true;
 }
 async function proxyMemorizeConversation(req, res) {
     const userId = String(req.body?.userId || "");
@@ -25127,90 +25147,38 @@ async function proxyMemorizeConversation(req, res) {
         return;
     }
     pruneLocalTasks();
+    try {
+        const cfg = readPluginConfig();
+        const namedConversation = conversation.map((msg) => {
+            if (!msg || typeof msg !== "object")
+                return msg;
+            if (msg.role === "user" && userName)
+                return { ...msg, name: userName };
+            if (msg.role === "assistant" && soulName)
+                return { ...msg, name: soulName };
+            return msg;
+        });
+        const srv = await ensureLocalServer(cfg);
+        const payload = buildMemuPayloadForLocal(cfg, userId, characterId, namedConversation, {
+            characterName,
+            chatFileName,
+            conversationId,
+        });
+        applyTimeZoneHints(payload, timeZone, timeZoneOffsetMin);
+        const qs = force ? '?force=true' : tail ? '?tail=true' : '';
+        await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
+    }
+    catch (e) {
+        const err = String(e?.message || e || "").trim() || "Memorize start failed";
+        res.status(502).json({ error: err });
+        return;
+    }
     const taskId = makeTaskId();
     localTasks.set(taskId, {
-        status: "PENDING",
         createdAt: Date.now(),
-        updatedAt: Date.now(),
         userId,
         soulId: characterId,
-        conversationId,
     });
-    // Fire and forget
-    void (async () => {
-        try {
-            setTask(taskId, { status: "PROCESSING" });
-            const cfg = readPluginConfig();
-            const namedConversation = conversation.map((msg) => {
-                if (!msg || typeof msg !== "object")
-                    return msg;
-                if (msg.role === "user" && userName)
-                    return { ...msg, name: userName };
-                if (msg.role === "assistant" && soulName)
-                    return { ...msg, name: soulName };
-                return msg;
-            });
-            const srv = await ensureLocalServer(cfg);
-            const payload = buildMemuPayloadForLocal(cfg, userId, characterId, namedConversation, {
-                characterName,
-                chatFileName,
-                conversationId,
-            });
-            applyTimeZoneHints(payload, timeZone, timeZoneOffsetMin);
-            const qs = force ? '?force=true' : tail ? '?tail=true' : '';
-            await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
-            // Server returns 202 immediately; batches run in background. Poll until done.
-            let completed = false;
-            let pollErr = null;
-            let inactiveNoConsolidationSeen = false;
-            for (let i = 0; i < MEMORIZE_PROGRESS_MAX_POLLS; i++) {
-                await new Promise(r => setTimeout(r, MEMORIZE_PROGRESS_POLL_INTERVAL_MS));
-                try {
-                    const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(userId)}&soul_id=${encodeURIComponent(characterId)}`, 'GET');
-                    if (p?.active) {
-                        inactiveNoConsolidationSeen = false;
-                        continue;
-                    }
-                    if (!p?.active) {
-                        if (conversationId) {
-                            try {
-                                if (await isConsolidationInProgress(srv.baseUrl, conversationId, characterId, userId)) {
-                                    inactiveNoConsolidationSeen = false;
-                                    continue;
-                                }
-                            }
-                            catch (e) {
-                                pollErr = `consolidation state read failed: ${String(e?.message || e)}`;
-                                continue;
-                            }
-                        }
-                        if (!inactiveNoConsolidationSeen) {
-                            inactiveNoConsolidationSeen = true;
-                            continue;
-                        }
-                        completed = true;
-                        break;
-                    }
-                }
-                catch (e) {
-                    pollErr = e?.message || String(e);
-                }
-            }
-            if (!completed) {
-                if (pollErr) {
-                    setTask(taskId, { status: "FAILURE", error: `Memorize progress polling failed: ${pollErr}` });
-                }
-                else {
-                    setTask(taskId, { status: "FAILURE", error: "Memorize progress polling timed out" });
-                }
-                return;
-            }
-            setTask(taskId, { status: 'SUCCESS' });
-        }
-        catch (e) {
-            setTask(taskId, { status: "FAILURE", error: e?.message || String(e) });
-        }
-    })();
     res.json({ taskId });
 }
 async function proxyGetTaskStatus(req, res) {
@@ -25220,26 +25188,34 @@ async function proxyGetTaskStatus(req, res) {
         res.json({ status: "FAILURE", error: "Unknown taskId" });
         return;
     }
-    let status = task.status;
-    let progress;
-    if (task.status === "PROCESSING" && task.userId && task.soulId) {
-        try {
-            const cfg = readPluginConfig();
-            const srv = await ensureLocalServer(cfg);
-            const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`, 'GET');
-            if (p?.active) {
-                status = "PROCESSING";
-                const phase = typeof p.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
-                progress = { current: p.current, total: p.total, ...(phase ? { phase } : {}) };
-            }
-            else if (await isConsolidationInProgress(srv.baseUrl, task.conversationId, task.soulId, task.userId)) {
-                status = "PROCESSING";
-                progress = { current: 1, total: 1, phase: "consolidation" };
-            }
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`, 'GET');
+        if (p?.active === true) {
+            const phase = typeof p?.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
+            const current = Number(p?.current);
+            const total = Number(p?.total);
+            const progress = Number.isFinite(current) && Number.isFinite(total)
+                ? { current, total, ...(phase ? { phase } : {}) }
+                : undefined;
+            res.json({ status: "PROCESSING", ...(progress ? { progress } : {}) });
+            return;
         }
-        catch { /* progress is best-effort */ }
+        const lastResult = String(p?.last_result || "").trim().toLowerCase();
+        if (!lastResult) {
+            res.json({ status: "FAILURE", error: "memorize progress missing terminal result" });
+            return;
+        }
+        const failed = lastResult === "failure" || lastResult === "cancelled";
+        res.json({
+            status: failed ? "FAILURE" : "SUCCESS",
+            ...(p?.error ? { error: String(p.error) } : {}),
+        });
     }
-    res.json({ status, ...(task.error ? { error: task.error } : {}), ...(progress ? { progress } : {}) });
+    catch (e) {
+        res.json({ status: "FAILURE", error: String(e?.message || e || "Task status polling failed") });
+    }
 }
 async function proxyRetrieveDefaultCategories(req, res) {
     const userId = String(req.body?.userId || "");

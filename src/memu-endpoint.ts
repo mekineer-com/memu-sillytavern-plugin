@@ -7,6 +7,34 @@ import fs from "fs";
 import path from "path";
 import { MODULE_NAME } from "./consts";
 
+// Read ST's own provider→baseURL map at startup by parsing two ST source files:
+//   constants.js  → CHAT_COMPLETION_SOURCES  (provider enum, e.g. MISTRALAI: "mistralai")
+//   chat-completions.js → API_* constants     (URLs, e.g. API_MISTRAL = "https://...")
+// Cross-references them via shared prefix (MISTRALAI ↔ API_MISTRAL).
+const _stProviderUrls: Record<string, string> = (() => {
+  try {
+    const stRoot = path.resolve(__dirname, '../../..');
+    const ccSrc = fs.readFileSync(path.join(stRoot, 'src/endpoints/backends/chat-completions.js'), 'utf8');
+    const constSrc = fs.readFileSync(path.join(stRoot, 'src/constants.js'), 'utf8');
+    const apiConsts: Record<string, string> = {};
+    for (const m of ccSrc.matchAll(/^const\s+API_(\w+)\s*=\s*'([^']+)'/gm)) {
+      apiConsts[m[1]] = m[2];
+    }
+    const csMatch = constSrc.match(/CHAT_COMPLETION_SOURCES\s*=\s*\{([^}]+)\}/s);
+    if (!csMatch) return {};
+    const map: Record<string, string> = {};
+    for (const m of csMatch[1].matchAll(/(\w+)\s*:\s*'([^']+)'/g)) {
+      const csKey = m[1];            // e.g. MISTRALAI
+      const providerName = m[2];     // e.g. "mistralai"
+      const url = apiConsts[csKey]
+        || Object.entries(apiConsts).find(([k]) => csKey.startsWith(k))?.[1]
+        || Object.entries(apiConsts).find(([k]) => k.startsWith(csKey))?.[1];
+      if (url) map[providerName] = url;
+    }
+    return map;
+  } catch { return {}; }
+})();
+
 const _warnOnceAt = new Map<string, number>();
 function warnOnce(key: string, msg: string, ttlMs: number = 30_000): void {
   const now = Date.now();
@@ -502,7 +530,7 @@ function resolveProfileBaseUrl(
     }
   }
 
-  return null;
+  return _stProviderUrls[provider] || null;
 }
 
 function findProfileById(profiles: AnyObject[], id: string): AnyObject | null {
