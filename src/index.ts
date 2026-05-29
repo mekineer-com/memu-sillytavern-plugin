@@ -7,7 +7,6 @@ import type { Request, Response } from 'express';
 import { MODULE_NAME } from './consts';
 import {
   registerGetTaskStatus,
-  registerGetTaskSummaryReady,
   registerMemorizeConversation,
   registerConversationRetrieve,
   registerConversationTurn,
@@ -106,7 +105,6 @@ export async function init(router: Router): Promise<void> {
   router.use(express.json({ limit: '10mb' }));
 
   registerGetTaskStatus(router);
-  registerGetTaskSummaryReady(router);
   registerCancelMemorize(router);
   registerRetrieveDefaultCategories(router);
   registerConversationRetrieve(router);

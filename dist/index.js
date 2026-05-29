@@ -23678,7 +23678,6 @@ function registerMetaEndpoints(router) {
 async function init(router) {
     router.use(express_1.default.json({ limit: '10mb' }));
     (0, memu_endpoint_1.registerGetTaskStatus)(router);
-    (0, memu_endpoint_1.registerGetTaskSummaryReady)(router);
     (0, memu_endpoint_1.registerCancelMemorize)(router);
     (0, memu_endpoint_1.registerRetrieveDefaultCategories)(router);
     (0, memu_endpoint_1.registerConversationRetrieve)(router);
@@ -23734,7 +23733,6 @@ exports.externalServerStop = externalServerStop;
 exports.registerServerControl = registerServerControl;
 exports.proxyMemorizeConversation = proxyMemorizeConversation;
 exports.proxyGetTaskStatus = proxyGetTaskStatus;
-exports.proxyGetTaskSummaryReady = proxyGetTaskSummaryReady;
 exports.proxyRetrieveDefaultCategories = proxyRetrieveDefaultCategories;
 exports.proxyConversationRetrieve = proxyConversationRetrieve;
 exports.proxyConversationTurn = proxyConversationTurn;
@@ -23743,7 +23741,6 @@ exports.proxyScopeStorageProbe = proxyScopeStorageProbe;
 exports.proxyLocalHealth = proxyLocalHealth;
 exports.registerMemorizeConversation = registerMemorizeConversation;
 exports.registerGetTaskStatus = registerGetTaskStatus;
-exports.registerGetTaskSummaryReady = registerGetTaskSummaryReady;
 exports.proxyCancelMemorize = proxyCancelMemorize;
 exports.registerCancelMemorize = registerCancelMemorize;
 exports.registerRetrieveDefaultCategories = registerRetrieveDefaultCategories;
@@ -25225,7 +25222,7 @@ async function proxyGetTaskStatus(req, res) {
     }
     let status = task.status;
     let progress;
-    if ((task.status === "PROCESSING" || task.status === "SUCCESS") && task.userId && task.soulId) {
+    if (task.status === "PROCESSING" && task.userId && task.soulId) {
         try {
             const cfg = readPluginConfig();
             const srv = await ensureLocalServer(cfg);
@@ -25243,34 +25240,6 @@ async function proxyGetTaskStatus(req, res) {
         catch { /* progress is best-effort */ }
     }
     res.json({ status, ...(task.error ? { error: task.error } : {}), ...(progress ? { progress } : {}) });
-}
-async function proxyGetTaskSummaryReady(req, res) {
-    const taskId = String(req.body?.taskId || "");
-    const task = localTasks.get(taskId);
-    if (!task) {
-        res.json({ allReady: false });
-        return;
-    }
-    if (task.status !== "SUCCESS") {
-        res.json({ allReady: false });
-        return;
-    }
-    if (!task.userId || !task.soulId) {
-        res.json({ allReady: true });
-        return;
-    }
-    try {
-        const cfg = readPluginConfig();
-        const srv = await ensureLocalServer(cfg);
-        const inProgress = await isConsolidationInProgress(srv.baseUrl, task.conversationId, task.soulId, task.userId);
-        res.json({ allReady: !inProgress });
-        return;
-    }
-    catch (e) {
-        warnOnce(`getTaskSummaryReady:${taskId}`, `state read failed while checking consolidation for task ${taskId}: ${String(e?.message || e)}`, 30000);
-        res.json({ allReady: false });
-        return;
-    }
 }
 async function proxyRetrieveDefaultCategories(req, res) {
     const userId = String(req.body?.userId || "");
@@ -25631,9 +25600,6 @@ function registerMemorizeConversation(router) {
 }
 function registerGetTaskStatus(router) {
     router.post("/getTaskStatus", proxyGetTaskStatus);
-}
-function registerGetTaskSummaryReady(router) {
-    router.post("/getTaskSummaryReady", proxyGetTaskSummaryReady);
 }
 async function proxyCancelMemorize(req, res) {
     const userId = String(req.body?.userId || "");

@@ -79,7 +79,6 @@ export declare function externalServerStop(): Promise<{
 export declare function registerServerControl(router: Router): void;
 export declare function proxyMemorizeConversation(req: Request, res: Response): Promise<void>;
 export declare function proxyGetTaskStatus(req: Request, res: Response): Promise<void>;
-export declare function proxyGetTaskSummaryReady(req: Request, res: Response): Promise<void>;
 export declare function proxyRetrieveDefaultCategories(req: Request, res: Response): Promise<void>;
 export declare function proxyConversationRetrieve(req: Request, res: Response): Promise<void>;
 export declare function proxyConversationTurn(req: Request, res: Response): Promise<void>;
@@ -88,7 +87,6 @@ export declare function proxyScopeStorageProbe(req: Request, res: Response): Pro
 export declare function proxyLocalHealth(_req: Request, res: Response): Promise<void>;
 export declare function registerMemorizeConversation(router: Router): void;
 export declare function registerGetTaskStatus(router: Router): void;
-export declare function registerGetTaskSummaryReady(router: Router): void;
 export declare function proxyCancelMemorize(req: Request, res: Response): Promise<void>;
 export declare function registerCancelMemorize(router: Router): void;
 export declare function registerRetrieveDefaultCategories(router: Router): void;

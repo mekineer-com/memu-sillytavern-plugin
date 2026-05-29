@@ -1624,7 +1624,7 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
   }
   let status = task.status;
   let progress: { current?: number; total?: number; phase?: string } | undefined;
-  if ((task.status === "PROCESSING" || task.status === "SUCCESS") && task.userId && task.soulId) {
+  if (task.status === "PROCESSING" && task.userId && task.soulId) {
     try {
       const cfg = readPluginConfig();
       const srv = await ensureLocalServer(cfg);
@@ -1640,38 +1640,6 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
     } catch { /* progress is best-effort */ }
   }
   res.json({ status, ...(task.error ? { error: task.error } : {}), ...(progress ? { progress } : {}) });
-}
-
-export async function proxyGetTaskSummaryReady(req: Request, res: Response): Promise<void> {
-  const taskId = String(req.body?.taskId || "");
-  const task = localTasks.get(taskId);
-  if (!task) {
-    res.json({ allReady: false });
-    return;
-  }
-  if (task.status !== "SUCCESS") {
-    res.json({ allReady: false });
-    return;
-  }
-  if (!task.userId || !task.soulId) {
-    res.json({ allReady: true });
-    return;
-  }
-  try {
-    const cfg = readPluginConfig();
-    const srv = await ensureLocalServer(cfg);
-    const inProgress = await isConsolidationInProgress(srv.baseUrl, task.conversationId, task.soulId, task.userId);
-    res.json({ allReady: !inProgress });
-    return;
-  } catch (e: any) {
-    warnOnce(
-      `getTaskSummaryReady:${taskId}`,
-      `state read failed while checking consolidation for task ${taskId}: ${String(e?.message || e)}`,
-      30_000,
-    );
-    res.json({ allReady: false });
-    return;
-  }
 }
 
 export async function proxyRetrieveDefaultCategories(req: Request, res: Response): Promise<void> {
@@ -2065,10 +2033,6 @@ export function registerMemorizeConversation(router: Router): void {
 
 export function registerGetTaskStatus(router: Router): void {
   router.post("/getTaskStatus", proxyGetTaskStatus);
-}
-
-export function registerGetTaskSummaryReady(router: Router): void {
-  router.post("/getTaskSummaryReady", proxyGetTaskSummaryReady);
 }
 
 export async function proxyCancelMemorize(req: Request, res: Response): Promise<void> {
