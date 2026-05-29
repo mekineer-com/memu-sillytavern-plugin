@@ -1451,14 +1451,12 @@ const localTasks = new Map<
     userId?: string;
     soulId?: string;
     conversationId?: string;
+    inactiveNoConsolidationSeen?: boolean;
   }
 >();
 
 const LOCAL_TASK_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 const LOCAL_TASK_MAX = 200;
-const MEMORIZE_PROGRESS_POLL_INTERVAL_MS = 3000;
-const MEMORIZE_PROGRESS_MAX_POLLS = 1200; // 60 minutes @ 3s
-
 function pruneLocalTasks(now: number = Date.now()): void {
   // Drop old tasks first (keeps memory bounded even if something never polls).
   const cutoff = now - LOCAL_TASK_TTL_MS;
@@ -1480,7 +1478,10 @@ function makeTaskId(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-function setTask(taskId: string, patch: Partial<{ status: LocalTaskStatus; updatedAt: number; error?: string }>) {
+function setTask(
+  taskId: string,
+  patch: Partial<{ status: LocalTaskStatus; updatedAt: number; error?: string; inactiveNoConsolidationSeen?: boolean }>,
+) {
   const prev = localTasks.get(taskId);
   if (!prev) return;
   localTasks.set(taskId, { ...prev, ...patch, updatedAt: Date.now() });
@@ -1541,6 +1542,7 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
     userId,
     soulId: characterId,
     conversationId,
+    inactiveNoConsolidationSeen: false,
   });
 
   // Fire and forget
@@ -1563,50 +1565,7 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
       applyTimeZoneHints(payload as any, timeZone, timeZoneOffsetMin);
       const qs = force ? '?force=true' : tail ? '?tail=true' : '';
       await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
-      // Server returns 202 immediately; batches run in background. Poll until done.
-      let completed = false;
-      let pollErr: string | null = null;
-      let inactiveNoConsolidationSeen = false;
-      for (let i = 0; i < MEMORIZE_PROGRESS_MAX_POLLS; i++) {
-        await new Promise(r => setTimeout(r, MEMORIZE_PROGRESS_POLL_INTERVAL_MS));
-        try {
-          const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(userId)}&soul_id=${encodeURIComponent(characterId)}`, 'GET') as any;
-          if (p?.active) {
-            inactiveNoConsolidationSeen = false;
-            continue;
-          }
-          if (!p?.active) {
-            if (conversationId) {
-              try {
-                if (await isConsolidationInProgress(srv.baseUrl, conversationId, characterId, userId)) {
-                  inactiveNoConsolidationSeen = false;
-                  continue;
-                }
-              } catch (e: any) {
-                pollErr = `consolidation state read failed: ${String(e?.message || e)}`;
-                continue;
-              }
-            }
-            if (!inactiveNoConsolidationSeen) {
-              inactiveNoConsolidationSeen = true;
-              continue;
-            }
-            completed = true;
-            break;
-          }
-        } catch (e: any) {
-          pollErr = e?.message || String(e);
-        }
-      }
-      if (!completed) {
-        if (pollErr) {
-          setTask(taskId, { status: "FAILURE", error: `Memorize progress polling failed: ${pollErr}` });
-        } else {
-          setTask(taskId, { status: "FAILURE", error: "Memorize progress polling timed out" });
-        }
-        return;
-      }
-      setTask(taskId, { status: 'SUCCESS' });
+      // Completion is determined by getTaskStatus using server progress+consolidation state.
     } catch (e: any) {
       setTask(taskId, { status: "FAILURE", error: e?.message || String(e) });
     }
@@ -1633,9 +1592,21 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
         status = "PROCESSING";
         const phase = typeof p.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
         progress = { current: p.current, total: p.total, ...(phase ? { phase } : {}) };
+        if (task.inactiveNoConsolidationSeen) {
+          setTask(taskId, { inactiveNoConsolidationSeen: false });
+        }
       } else if (await isConsolidationInProgress(srv.baseUrl, task.conversationId, task.soulId, task.userId)) {
         status = "PROCESSING";
         progress = { current: 1, total: 1, phase: "consolidation" };
+        if (task.inactiveNoConsolidationSeen) {
+          setTask(taskId, { inactiveNoConsolidationSeen: false });
+        }
+      } else if (!task.inactiveNoConsolidationSeen) {
+        status = "PROCESSING";
+        setTask(taskId, { inactiveNoConsolidationSeen: true });
+      } else {
+        status = "SUCCESS";
+        setTask(taskId, { status: "SUCCESS", error: undefined, inactiveNoConsolidationSeen: false });
       }
     } catch { /* progress is best-effort */ }
   }
