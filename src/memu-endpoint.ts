@@ -1566,20 +1566,30 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
       // Server returns 202 immediately; batches run in background. Poll until done.
       let completed = false;
       let pollErr: string | null = null;
+      let inactiveNoConsolidationSeen = false;
       for (let i = 0; i < MEMORIZE_PROGRESS_MAX_POLLS; i++) {
         await new Promise(r => setTimeout(r, MEMORIZE_PROGRESS_POLL_INTERVAL_MS));
         try {
           const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(userId)}&soul_id=${encodeURIComponent(characterId)}`, 'GET') as any;
+          if (p?.active) {
+            inactiveNoConsolidationSeen = false;
+            continue;
+          }
           if (!p?.active) {
             if (conversationId) {
               try {
                 if (await isConsolidationInProgress(srv.baseUrl, conversationId, characterId, userId)) {
+                  inactiveNoConsolidationSeen = false;
                   continue;
                 }
               } catch (e: any) {
                 pollErr = `consolidation state read failed: ${String(e?.message || e)}`;
                 continue;
               }
+            }
+            if (!inactiveNoConsolidationSeen) {
+              inactiveNoConsolidationSeen = true;
+              continue;
             }
             completed = true;
             break;
