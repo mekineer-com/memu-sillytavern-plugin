@@ -1546,33 +1546,23 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
       `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`,
       'GET',
     ) as any;
-    const phase = typeof p?.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
-    const current = Number(p?.current);
-    const total = Number(p?.total);
-    const progress = Number.isFinite(current) && Number.isFinite(total)
-      ? { current, total, ...(phase ? { phase } : {}) }
-      : undefined;
     if (p?.active === true) {
+      const phase = typeof p?.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
+      const current = Number(p?.current);
+      const total = Number(p?.total);
+      const progress = Number.isFinite(current) && Number.isFinite(total)
+        ? { current, total, ...(phase ? { phase } : {}) }
+        : undefined;
       res.json({ status: "PROCESSING", ...(progress ? { progress } : {}) });
       return;
     }
-    const lastResult = String(p?.last_result || "").trim().toLowerCase();
-    if (lastResult === "success" || lastResult === "nothing_to_memorize") {
-      res.json({ status: "SUCCESS" });
-      return;
-    }
-    if (lastResult === "failure" || lastResult === "cancelled") {
-      const err = String(p?.error || (lastResult === "cancelled" ? "cancelled" : "Memorize failed")).trim();
-      res.json({ status: "FAILURE", ...(err ? { error: err } : {}) });
-      return;
-    }
-    const err = lastResult
-      ? `Unexpected memorize terminal result: ${lastResult}`
-      : "Memorize progress missing terminal result";
-    res.json({ status: "FAILURE", error: err });
+    const failed = p?.last_result === "failure" || p?.last_result === "cancelled";
+    res.json({
+      status: failed ? "FAILURE" : "SUCCESS",
+      ...(p?.error ? { error: String(p.error) } : {}),
+    });
   } catch (e: any) {
-    const err = String(e?.message || e || "").trim() || "Task status polling failed";
-    res.json({ status: "FAILURE", error: err });
+    res.json({ status: "FAILURE", error: String(e?.message || e || "Task status polling failed") });
   }
 }
 
