@@ -1556,7 +1556,22 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
       res.json({ status: "PROCESSING", ...(progress ? { progress } : {}) });
       return;
     }
-    const failed = p?.last_result === "failure" || p?.last_result === "cancelled";
+    const lastResult = String(p?.last_result || "").trim().toLowerCase();
+    if (!lastResult) {
+      res.json({
+        status: "FAILURE",
+        error: "NON_RETRYABLE: memorize progress missing terminal result",
+      });
+      return;
+    }
+    const failed = lastResult === "failure" || lastResult === "cancelled";
+    if (lastResult !== "success" && lastResult !== "nothing_to_memorize" && !failed) {
+      res.json({
+        status: "FAILURE",
+        error: `NON_RETRYABLE: unexpected memorize terminal result: ${lastResult}`,
+      });
+      return;
+    }
     res.json({
       status: failed ? "FAILURE" : "SUCCESS",
       ...(p?.error ? { error: String(p.error) } : {}),
