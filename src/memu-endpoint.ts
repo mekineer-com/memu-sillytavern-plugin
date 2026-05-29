@@ -1565,54 +1565,48 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
     res.json({ status: "FAILURE", error: "Unknown taskId" });
     return;
   }
-  if (task.status === "SUCCESS" || task.status === "FAILURE") {
+  if (!task.userId || !task.soulId) {
     res.json({ status: task.status, ...(task.error ? { error: task.error } : {}) });
     return;
   }
-  if (task.userId && task.soulId) {
-    try {
-      const cfg = readPluginConfig();
-      const srv = await ensureLocalServer(cfg);
-      const p = await httpJson(
-        srv.baseUrl,
-        `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`,
-        'GET',
-      ) as any;
-      if (p?.active === true) {
-        setTask(taskId, { status: "PROCESSING", error: undefined });
-        const phase = typeof p?.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
-        const current = Number(p?.current);
-        const total = Number(p?.total);
-        const progress = Number.isFinite(current) && Number.isFinite(total)
-          ? { current, total, ...(phase ? { phase } : {}) }
-          : undefined;
-        res.json({ status: "PROCESSING", ...(progress ? { progress } : {}) });
-        return;
-      }
-      const lastResult = String(p?.last_result || "").trim().toLowerCase();
-      if (lastResult === "success" || lastResult === "nothing_to_memorize") {
-        setTask(taskId, { status: "SUCCESS", error: undefined });
-        res.json({ status: "SUCCESS" });
-        return;
-      }
-      if (lastResult === "failure" || lastResult === "cancelled") {
-        const err = String(p?.error || (lastResult === "cancelled" ? "cancelled" : "Memorize failed")).trim();
-        setTask(taskId, { status: "FAILURE", error: err });
-        res.json({ status: "FAILURE", error: err });
-        return;
-      }
-      // No terminal marker yet: keep processing.
-      setTask(taskId, { status: "PROCESSING" });
-      res.json({ status: "PROCESSING" });
-      return;
-    } catch (e: any) {
-      const err = String(e?.message || e || "").trim() || "Task status polling failed";
-      setTask(taskId, { status: "FAILURE", error: err });
-      res.json({ status: "FAILURE", error: err });
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const p = await httpJson(
+      srv.baseUrl,
+      `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`,
+      'GET',
+    ) as any;
+    const phase = typeof p?.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
+    const current = Number(p?.current);
+    const total = Number(p?.total);
+    const progress = Number.isFinite(current) && Number.isFinite(total)
+      ? { current, total, ...(phase ? { phase } : {}) }
+      : undefined;
+    if (p?.active === true) {
+      setTask(taskId, { status: "PROCESSING", error: undefined });
+      res.json({ status: "PROCESSING", ...(progress ? { progress } : {}) });
       return;
     }
+    const lastResult = String(p?.last_result || "").trim().toLowerCase();
+    if (lastResult === "success" || lastResult === "nothing_to_memorize") {
+      setTask(taskId, { status: "SUCCESS", error: undefined });
+      res.json({ status: "SUCCESS" });
+      return;
+    }
+    if (lastResult === "failure" || lastResult === "cancelled") {
+      const err = String(p?.error || (lastResult === "cancelled" ? "cancelled" : "Memorize failed")).trim();
+      setTask(taskId, { status: "FAILURE", error: err });
+      res.json({ status: "FAILURE", ...(err ? { error: err } : {}) });
+      return;
+    }
+    setTask(taskId, { status: "PROCESSING", error: undefined });
+    res.json({ status: "PROCESSING", ...(progress ? { progress } : {}) });
+  } catch (e: any) {
+    const err = String(e?.message || e || "").trim() || "Task status polling failed";
+    setTask(taskId, { status: "FAILURE", error: err });
+    res.json({ status: "FAILURE", error: err });
   }
-  res.json({ status: task.status, ...(task.error ? { error: task.error } : {}) });
 }
 
 export async function proxyRetrieveDefaultCategories(req: Request, res: Response): Promise<void> {
