@@ -1435,21 +1435,15 @@ async function httpJson(baseUrl: string, urlPath: string, method: string, body?:
 }
 
 // ---------------------------------
-// Local task status emulation
+// Local task routing cache
 // ---------------------------------
-
-type LocalTaskStatus = "PENDING" | "PROCESSING" | "SUCCESS" | "FAILURE";
 
 const localTasks = new Map<
   string,
   {
-    status: LocalTaskStatus;
     createdAt: number;
-    updatedAt: number;
-    error?: string;
-    batchTotal?: number;
-    userId?: string;
-    soulId?: string;
+    userId: string;
+    soulId: string;
   }
 >();
 
@@ -1459,7 +1453,7 @@ function pruneLocalTasks(now: number = Date.now()): void {
   // Drop old tasks first (keeps memory bounded even if something never polls).
   const cutoff = now - LOCAL_TASK_TTL_MS;
   for (const [id, t] of localTasks) {
-    if ((t.updatedAt || t.createdAt) < cutoff) localTasks.delete(id);
+    if (t.createdAt < cutoff) localTasks.delete(id);
   }
 
   // If still too many, drop oldest by createdAt (Map preserves insertion order,
@@ -1474,20 +1468,6 @@ function pruneLocalTasks(now: number = Date.now()): void {
 
 function makeTaskId(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-function setTask(
-  taskId: string,
-  patch: Partial<{
-    status: LocalTaskStatus;
-    updatedAt: number;
-    error?: string;
-  }>,
-) {
-  const prev = localTasks.get(taskId);
-  if (!prev) return;
-  localTasks.set(taskId, { ...prev, ...patch, updatedAt: Date.now() });
-  pruneLocalTasks();
 }
 
 function applyTimeZoneHints(payload: any, timeZone: string, timeZoneOffsetMin: number | undefined): void {
@@ -1520,41 +1500,34 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
   }
 
   pruneLocalTasks();
-
+  try {
+    const cfg = readPluginConfig();
+    const namedConversation = conversation.map((msg: any) => {
+      if (!msg || typeof msg !== "object") return msg;
+      if (msg.role === "user" && userName) return { ...msg, name: userName };
+      if (msg.role === "assistant" && soulName) return { ...msg, name: soulName };
+      return msg;
+    });
+    const srv = await ensureLocalServer(cfg);
+    const payload = buildMemuPayloadForLocal(cfg, userId, characterId, namedConversation, {
+      characterName,
+      chatFileName,
+      conversationId,
+    });
+    applyTimeZoneHints(payload as any, timeZone, timeZoneOffsetMin);
+    const qs = force ? '?force=true' : tail ? '?tail=true' : '';
+    await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
+  } catch (e: any) {
+    const err = String(e?.message || e || "").trim() || "Memorize start failed";
+    res.status(502).json({ error: err });
+    return;
+  }
   const taskId = makeTaskId();
   localTasks.set(taskId, {
-    status: "PENDING",
     createdAt: Date.now(),
-    updatedAt: Date.now(),
     userId,
     soulId: characterId,
   });
-
-  // Fire and forget
-  void (async () => {
-    try {
-      setTask(taskId, { status: "PROCESSING" });
-      const cfg = readPluginConfig();
-      const namedConversation = conversation.map((msg: any) => {
-        if (!msg || typeof msg !== "object") return msg;
-        if (msg.role === "user" && userName) return { ...msg, name: userName };
-        if (msg.role === "assistant" && soulName) return { ...msg, name: soulName };
-        return msg;
-      });
-      const srv = await ensureLocalServer(cfg);
-      const payload = buildMemuPayloadForLocal(cfg, userId, characterId, namedConversation, {
-        characterName,
-        chatFileName,
-        conversationId,
-      });
-      applyTimeZoneHints(payload as any, timeZone, timeZoneOffsetMin);
-      const qs = force ? '?force=true' : tail ? '?tail=true' : '';
-      await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
-    } catch (e: any) {
-      setTask(taskId, { status: "FAILURE", error: e?.message || String(e) });
-    }
-  })();
-
   res.json({ taskId });
 }
 
@@ -1563,10 +1536,6 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
   const task = localTasks.get(taskId);
   if (!task) {
     res.json({ status: "FAILURE", error: "Unknown taskId" });
-    return;
-  }
-  if (!task.userId || !task.soulId) {
-    res.json({ status: task.status, ...(task.error ? { error: task.error } : {}) });
     return;
   }
   try {
@@ -1584,27 +1553,25 @@ export async function proxyGetTaskStatus(req: Request, res: Response): Promise<v
       ? { current, total, ...(phase ? { phase } : {}) }
       : undefined;
     if (p?.active === true) {
-      setTask(taskId, { status: "PROCESSING", error: undefined });
       res.json({ status: "PROCESSING", ...(progress ? { progress } : {}) });
       return;
     }
     const lastResult = String(p?.last_result || "").trim().toLowerCase();
     if (lastResult === "success" || lastResult === "nothing_to_memorize") {
-      setTask(taskId, { status: "SUCCESS", error: undefined });
       res.json({ status: "SUCCESS" });
       return;
     }
     if (lastResult === "failure" || lastResult === "cancelled") {
       const err = String(p?.error || (lastResult === "cancelled" ? "cancelled" : "Memorize failed")).trim();
-      setTask(taskId, { status: "FAILURE", error: err });
       res.json({ status: "FAILURE", ...(err ? { error: err } : {}) });
       return;
     }
-    setTask(taskId, { status: "PROCESSING", error: undefined });
-    res.json({ status: "PROCESSING", ...(progress ? { progress } : {}) });
+    const err = lastResult
+      ? `Unexpected memorize terminal result: ${lastResult}`
+      : "Memorize progress missing terminal result";
+    res.json({ status: "FAILURE", error: err });
   } catch (e: any) {
     const err = String(e?.message || e || "").trim() || "Task status polling failed";
-    setTask(taskId, { status: "FAILURE", error: err });
     res.json({ status: "FAILURE", error: err });
   }
 }
