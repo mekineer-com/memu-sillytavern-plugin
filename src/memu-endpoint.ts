@@ -1681,6 +1681,9 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     payload.user = { user_id: userId, soul_id: soulId };
     payload.method = "rag";
     payload.query = query;
+    if (conversationId.startsWith("whatsapp:")) {
+      payload.load_source_history = true;
+    }
     if (userName) {
       payload.user_name = userName;
     }
