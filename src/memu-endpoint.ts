@@ -55,7 +55,6 @@ type MemuStep =
   | 'memory_extract'
   | 'category_update'
   | 'reflection'
-  | 'ranking'
   | 'consolidation'
   | 'embeddings';
 
@@ -181,7 +180,6 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
     "memory_extract",
     "category_update",
     "reflection",
-    "ranking",
     "consolidation",
     "embeddings",
   ];
@@ -277,40 +275,6 @@ function listSTUserDirs(): string[] {
   return dirs;
 }
 
-function deepCollectProfiles(node: any, out: AnyObject[], depth: number = 0): void {
-  if (!node || depth > 14) return;
-  if (Array.isArray(node)) {
-    for (const v of node) deepCollectProfiles(v, out, depth + 1);
-    return;
-  }
-  if (typeof node !== "object") return;
-
-  const obj = node as AnyObject;
-  // Heuristic: connection profile objects usually have id + name + some provider-ish fields.
-  if (typeof obj.id === "string" && typeof obj.name === "string") {
-    const hasProviderish =
-      "api" in obj ||
-      "provider" in obj ||
-      "apiType" in obj ||
-      "api_type" in obj ||
-      "baseUrl" in obj ||
-      "base_url" in obj ||
-      "apiUrl" in obj ||
-      "api_url" in obj ||
-      "api-url" in obj ||
-      "url" in obj ||
-      "endpoint" in obj ||
-      "model" in obj ||
-      "chat_model" in obj ||
-      "chatModel" in obj;
-
-    if (hasProviderish) out.push(obj);
-  }
-
-  for (const k of Object.keys(obj)) {
-    deepCollectProfiles(obj[k], out, depth + 1);
-  }
-}
 
 function loadAllProfilesFromSettings(): AnyObject[] {
   const now = Date.now();
@@ -322,23 +286,13 @@ function loadAllProfilesFromSettings(): AnyObject[] {
     const settings = readJsonCached(path.join(dir, "settings.json"));
     if (!settings) continue;
 
-    // Fast path: ST stores connection profiles here in 1.15+
+    // ST stores connection profiles here since 1.15+
     const cm = (settings as any)?.extension_settings?.connectionManager;
-    if (cm && Array.isArray(cm.profiles)) {
-      for (const prof of cm.profiles) {
-        if (!prof || typeof prof !== 'object') continue;
-        (prof as any).__st_user_dir = dir;
-        out.push(prof as any);
-      }
-      continue;
-    }
-
-    // Fallback: heuristic deep scan
-    const found: AnyObject[] = [];
-    deepCollectProfiles(settings, found);
-    for (const prof of found) {
+    if (!cm || !Array.isArray(cm.profiles)) continue;
+    for (const prof of cm.profiles) {
+      if (!prof || typeof prof !== 'object') continue;
       (prof as any).__st_user_dir = dir;
-      out.push(prof);
+      out.push(prof as any);
     }
   }
 
@@ -932,10 +886,6 @@ function resolveProfileCredentials(profileId: string): {
   };
 }
 
-function safeFsName(v: string): string {
-  const cleaned = v.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 80);
-  return cleaned || "default";
-}
 
 function sanitizeScopedDbFilename(v: string): string {
   let s = String(v || "").trim();
@@ -978,11 +928,11 @@ function buildMemuPayloadForLocal(
   userId: string,
   characterId: string,
   conversation?: any,
-  opts?: { characterName?: string; chatFileName?: string; conversationId?: string }
+  opts?: { conversationId?: string }
 ): any {
 
   // Profiles keyed by step name. Server's config.json provides defaults for anything not sent.
-  const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "ranking", "consolidation", "embeddings"];
+  const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "consolidation", "embeddings"];
 
   function resolveOrSkip(id: string, step: string): NonNullable<ReturnType<typeof resolveProfileCredentials>> {
     const cred = resolveProfileCredentials(id);
@@ -1029,7 +979,6 @@ function buildMemuPayloadForLocal(
 
   const retrieve_config: any = {};
   if (llm_profiles["reflection"]) retrieve_config.sufficiency_check_llm_profile = "reflection";
-  if (llm_profiles["ranking"]) retrieve_config.llm_ranking_llm_profile = "ranking";
 
   const payload: any = {
     user: { user_id: userId, soul_id: characterId },
@@ -1041,16 +990,6 @@ function buildMemuPayloadForLocal(
   if (conversation) payload.conversation = conversation;
   if (typeof opts?.conversationId === 'string' && opts.conversationId.trim()) {
     payload.conversation_id = opts.conversationId.trim();
-  }
-
-  // Minimal pointer (no filesystem probing): just store the expected SillyTavern chat file path.
-  const chatFileName = String(opts?.chatFileName || '').trim();
-  const characterName = String(opts?.characterName || '').trim();
-  if (chatFileName) {
-    const name = chatFileName.endsWith('.jsonl') ? chatFileName : `${chatFileName}.jsonl`;
-    const charDir = safeFsName(characterName || characterId);
-    // Assumption: single-user default install (default-user).
-    payload.resource_url = path.join('data', 'default-user', 'chats', charDir, name);
   }
 
   return payload;
@@ -1506,29 +1445,18 @@ function makeTaskId(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-function applyTimeZoneHints(payload: any, timeZone: string, timeZoneOffsetMin: number | undefined): void {
-  if (timeZone) payload.time_zone = timeZone;
-  if (timeZoneOffsetMin !== undefined) payload.time_zone_offset_min = timeZoneOffsetMin;
-}
 
 export async function proxyMemorizeConversation(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
   const conversationId = String(req.body?.conversationId || "");
-  // KISS: soul scope is the character name.
-  // If characterId is missing, fall back to characterName (and vice-versa).
   const characterId = String(req.body?.soulId || "");
-  const characterName = String(req.body?.soulName || "");
+  const soulName = String(req.body?.soulName || characterId || "").trim();
   const userName = String(req.body?.userName || "").trim();
-  const soulName = String(req.body?.soulName || characterName || characterId || "").trim();
-  const chatFileName = String(req.body?.chatFileName || "");
   const conversation = req.body?.conversation;
   const forceRaw = req.query?.force ?? req.body?.force;
   const force = forceRaw === true || String(forceRaw || "").trim().toLowerCase() === "true";
   const tailRaw = req.query?.tail ?? req.body?.tail;
   const tail = tailRaw === true || String(tailRaw || "").trim().toLowerCase() === "true";
-  const timeZone = String(req.body?.timeZone || "").trim();
-  const timeZoneOffsetMinRaw = req.body?.timeZoneOffsetMin;
-  const timeZoneOffsetMin = Number.isFinite(Number(timeZoneOffsetMinRaw)) ? Number(timeZoneOffsetMinRaw) : undefined;
 
   if (!userId || !characterId || !Array.isArray(conversation)) {
     res.status(400).json({ error: "Missing userId/soulId/conversation" });
@@ -1546,11 +1474,8 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
     });
     const srv = await ensureLocalServer(cfg);
     const payload = buildMemuPayloadForLocal(cfg, userId, characterId, namedConversation, {
-      characterName,
-      chatFileName,
       conversationId,
     });
-    applyTimeZoneHints(payload as any, timeZone, timeZoneOffsetMin);
     const qs = force ? '?force=true' : tail ? '?tail=true' : '';
     await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
   } catch (e: any) {
@@ -1679,7 +1604,6 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     });
 
     payload.user = { user_id: userId, soul_id: soulId };
-    payload.method = "rag";
     payload.query = query;
     if (conversationId.startsWith("whatsapp:")) {
       payload.load_source_history = true;
@@ -1693,12 +1617,6 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     if (chatType) {
       payload.chat_type = chatType;
     }
-    const retrieveConfig = (payload.retrieve_config && typeof payload.retrieve_config === 'object')
-      ? { ...payload.retrieve_config }
-      : {};
-    retrieveConfig.route_intention = true;
-    retrieveConfig.sufficiency_check = true;
-    payload.retrieve_config = retrieveConfig;
     if (Array.isArray(req.body?.history)) {
       payload.history = req.body.history;
     }
@@ -1733,14 +1651,9 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
   const chatType = String(req.body?.chatType || "").trim();
   const message = String(req.body?.message || "");
   const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
-  const applyTurnMaintenance = req.body?.applyTurnMaintenance;
   const dryRun = req.body?.dryRun;
   const debug = req.body?.debug;
   const promptOverridePayload = req.body?.promptOverridePayload;
-  const temperature = req.body?.temperature;
-  const maxTokens = req.body?.maxTokens;
-  const timeZone = req.body?.timeZone;
-  const timeZoneOffsetMin = req.body?.timeZoneOffsetMin;
 
   if (!userId || !soulId || !conversationId) {
     res.status(400).json({ error: "Missing userId/soulId/conversationId" });
@@ -1764,7 +1677,6 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
     if (chatName) payload.chat_name = chatName;
     if (chatType) payload.chat_type = chatType;
     if (history && history.length > 0) payload.history = history;
-    if (applyTurnMaintenance !== undefined) payload.apply_turn_maintenance = !!applyTurnMaintenance;
     if (dryRun !== undefined) payload.dry_run = !!dryRun;
     if (debug !== undefined) payload.debug = !!debug;
     if (req.body?.soul_card) {
@@ -1772,18 +1684,6 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
     }
     if (promptOverridePayload !== undefined) {
       payload.prompt_override_payload = promptOverridePayload;
-    }
-    if (temperature !== undefined) {
-      payload.temperature = temperature;
-    }
-    if (maxTokens !== undefined) {
-      payload.max_tokens = maxTokens;
-    }
-    if (typeof timeZone === "string" && timeZone.trim()) {
-      payload.time_zone = timeZone;
-    }
-    if (typeof timeZoneOffsetMin === "number" && Number.isFinite(timeZoneOffsetMin)) {
-      payload.time_zone_offset_min = timeZoneOffsetMin;
     }
 
     const resp = await httpJson(
