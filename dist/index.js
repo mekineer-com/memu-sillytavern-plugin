@@ -24579,8 +24579,8 @@ const _openaiCompatProviders = new Set([
 function mapSTProviderToMemU(provider) {
     const p = String(provider || '').trim().toLowerCase();
     if (!p || _openaiCompatProviders.has(p))
-        return { provider: 'openai', client_backend: 'httpx' };
-    return { provider: 'openai', client_backend: 'httpx', provider_hint: p };
+        return { provider: 'openai' };
+    return { provider: 'openai', provider_hint: p };
 }
 function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) {
     // Profiles keyed by step name. Server's config.json provides defaults for anything not sent.
@@ -24598,7 +24598,6 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
             base_url: cred.baseUrl,
             api_key: cred.key,
             chat_model: cred.model,
-            client_backend: mapped.client_backend,
             ...(mapped.provider_hint ? { provider_hint: mapped.provider_hint } : {}),
         };
     }

@@ -917,10 +917,10 @@ const _openaiCompatProviders = new Set([
   'ollama',
 ]);
 
-function mapSTProviderToMemU(provider: string): { provider: string; client_backend: string; provider_hint?: string } {
+function mapSTProviderToMemU(provider: string): { provider: string; provider_hint?: string } {
   const p = String(provider || '').trim().toLowerCase();
-  if (!p || _openaiCompatProviders.has(p)) return { provider: 'openai', client_backend: 'httpx' };
-  return { provider: 'openai', client_backend: 'httpx', provider_hint: p };
+  if (!p || _openaiCompatProviders.has(p)) return { provider: 'openai' };
+  return { provider: 'openai', provider_hint: p };
 }
 
 function buildMemuPayloadForLocal(
@@ -947,7 +947,6 @@ function buildMemuPayloadForLocal(
       base_url: cred.baseUrl,
       api_key: cred.key,
       chat_model: cred.model,
-      client_backend: mapped.client_backend,
       ...(mapped.provider_hint ? { provider_hint: mapped.provider_hint } : {}),
     };
   }
