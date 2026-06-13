@@ -25076,6 +25076,8 @@ async function proxyMemorizeConversation(req, res) {
     const force = forceRaw === true || String(forceRaw || "").trim().toLowerCase() === "true";
     const tailRaw = req.query?.tail ?? req.body?.tail;
     const tail = tailRaw === true || String(tailRaw || "").trim().toLowerCase() === "true";
+    const rebuildRaw = req.query?.rebuild ?? req.body?.rebuild;
+    const rebuild = rebuildRaw === true || String(rebuildRaw || "").trim().toLowerCase() === "true";
     if (!userId || !characterId || !Array.isArray(conversation)) {
         res.status(400).json({ error: "Missing userId/soulId/conversation" });
         return;
@@ -25096,7 +25098,7 @@ async function proxyMemorizeConversation(req, res) {
         const payload = buildMemuPayloadForLocal(cfg, userId, characterId, namedConversation, {
             conversationId,
         });
-        const qs = force ? '?force=true' : tail ? '?tail=true' : '';
+        const qs = rebuild ? '?rebuild=true' : force ? '?force=true' : tail ? '?tail=true' : '';
         await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
     }
     catch (e) {
