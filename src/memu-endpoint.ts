@@ -1477,7 +1477,12 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
     const payload = buildMemuPayloadForLocal(cfg, userId, characterId, namedConversation, {
       conversationId,
     });
-    const qs = rebuild ? '?rebuild=true' : force ? '?force=true' : tail ? '?tail=true' : '';
+    const query = new URLSearchParams();
+    if (rebuild) query.set('rebuild', 'true');
+    if (force) query.set('force', 'true');
+    if (tail) query.set('tail', 'true');
+    const queryString = query.toString();
+    const qs = queryString ? `?${queryString}` : '';
     await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
   } catch (e: any) {
     const err = String(e?.message || e || "").trim() || "Memorize start failed";
