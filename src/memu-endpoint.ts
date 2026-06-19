@@ -1656,6 +1656,8 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
   const chatName = String(req.body?.chatName || "").trim();
   const chatType = String(req.body?.chatType || "").trim();
   const message = String(req.body?.message || "");
+  const messageTsMs = Number(req.body?.messageTsMs);
+  const messageSourceId = String(req.body?.messageSourceId || "").trim();
   const history = Array.isArray(req.body?.history) ? req.body.history : undefined;
   const dryRun = req.body?.dryRun;
   const debug = req.body?.debug;
@@ -1679,6 +1681,8 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
 
     payload.user = { user_id: userId, soul_id: soulId };
     payload.message = message;
+    if (Number.isFinite(messageTsMs)) payload.message_ts_ms = Math.trunc(messageTsMs);
+    if (messageSourceId) payload.message_source_id = messageSourceId;
     if (userName) payload.user_name = userName;
     if (chatName) payload.chat_name = chatName;
     if (chatType) payload.chat_type = chatType;
