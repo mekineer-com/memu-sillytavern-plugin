@@ -25381,6 +25381,11 @@ async function proxyScopeStorageProbe(req, res) {
         const sqliteDir = path_1.default.resolve(_expandTilde(sqliteDirRaw));
         const dbFile = `${soulId.trim()}.db`;
         const dbPath = path_1.default.join(sqliteDir, dbFile);
+        const baseDbPath = typeof storage?.sqlite_path === "string" ? path_1.default.resolve(_expandTilde(storage.sqlite_path)) : "";
+        if (dbPath === baseDbPath) {
+            res.status(400).json({ ok: false, userId, soulId, provider, reason: "base_database" });
+            return;
+        }
         if (path_1.default.dirname(dbPath) !== sqliteDir) {
             res.status(400).json({ ok: false, userId, soulId, provider, reason: "invalid_soul_id" });
             return;

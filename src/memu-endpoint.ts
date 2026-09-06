@@ -1786,6 +1786,11 @@ export async function proxyScopeStorageProbe(req: Request, res: Response): Promi
     const sqliteDir = path.resolve(_expandTilde(sqliteDirRaw));
     const dbFile = `${soulId.trim()}.db`;
     const dbPath = path.join(sqliteDir, dbFile);
+    const baseDbPath = typeof storage?.sqlite_path === "string" ? path.resolve(_expandTilde(storage.sqlite_path)) : "";
+    if (dbPath === baseDbPath) {
+      res.status(400).json({ ok: false, userId, soulId, provider, reason: "base_database" });
+      return;
+    }
     if (path.dirname(dbPath) !== sqliteDir) {
       res.status(400).json({ ok: false, userId, soulId, provider, reason: "invalid_soul_id" });
       return;
