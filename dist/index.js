@@ -24548,14 +24548,6 @@ function resolveProfileCredentials(profileId) {
         key: key,
     };
 }
-function sanitizeScopedDbFilename(v) {
-    let s = String(v || "").trim();
-    s = s.replace(/[^A-Za-z0-9._-]+/g, "_");
-    s = s.replace(/^[._-]+/, "").replace(/[._-]+$/, "");
-    if (!s)
-        s = "unknown";
-    return s.slice(0, 80);
-}
 let _loggedDefaultCategories = false;
 const _openaiCompatProviders = new Set([
     'openai',
@@ -25387,8 +25379,12 @@ async function proxyScopeStorageProbe(req, res) {
             return;
         }
         const sqliteDir = path_1.default.resolve(_expandTilde(sqliteDirRaw));
-        const dbFile = `${sanitizeScopedDbFilename(soulId)}.db`;
+        const dbFile = `${soulId.trim()}.db`;
         const dbPath = path_1.default.join(sqliteDir, dbFile);
+        if (path_1.default.dirname(dbPath) !== sqliteDir) {
+            res.status(400).json({ ok: false, userId, soulId, provider, reason: "invalid_soul_id" });
+            return;
+        }
         if (!fs_1.default.existsSync(dbPath)) {
             res.json({
                 ok: true,
