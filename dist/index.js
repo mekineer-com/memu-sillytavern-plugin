@@ -23689,6 +23689,7 @@ async function init(router) {
     (0, memu_endpoint_1.registerRelationships)(router);
     (0, memu_endpoint_1.registerLocalHealth)(router);
     (0, memu_endpoint_1.registerOwner)(router);
+    (0, memu_endpoint_1.registerSouls)(router);
     registerMetaEndpoints(router);
     (0, memu_endpoint_1.registerServerControl)(router);
     console.log(chalk_1.default.green(consts_1.MODULE_NAME), 'Plugin initialized');
@@ -23741,6 +23742,7 @@ exports.proxyConversationTurnUndo = proxyConversationTurnUndo;
 exports.proxyScopeStorageProbe = proxyScopeStorageProbe;
 exports.proxyLocalHealth = proxyLocalHealth;
 exports.proxyOwner = proxyOwner;
+exports.proxySouls = proxySouls;
 exports.registerMemorizeConversation = registerMemorizeConversation;
 exports.registerGetTaskStatus = registerGetTaskStatus;
 exports.proxyCancelMemorize = proxyCancelMemorize;
@@ -23752,6 +23754,7 @@ exports.registerConversationTurnUndo = registerConversationTurnUndo;
 exports.registerScopeStorageProbe = registerScopeStorageProbe;
 exports.registerLocalHealth = registerLocalHealth;
 exports.registerOwner = registerOwner;
+exports.registerSouls = registerSouls;
 exports.proxyNarrativeSuggestion = proxyNarrativeSuggestion;
 exports.registerNarrativeSuggestion = registerNarrativeSuggestion;
 exports.proxyListRelationships = proxyListRelationships;
@@ -25030,7 +25033,7 @@ async function httpJson(baseUrl, urlPath, method, body) {
     catch { /* ignore */ }
     if (!r.ok) {
         const msg = (parsed && (parsed.detail || parsed.error)) ? String(parsed.detail || parsed.error) : (txt || `HTTP ${r.status}`);
-        throw new Error(msg);
+        throw Object.assign(new Error(msg), { status: r.status });
     }
     return parsed;
 }
@@ -25504,7 +25507,20 @@ async function proxyOwner(req, res) {
         res.json(result);
     }
     catch (e) {
-        res.status(503).json({ error: e?.message || String(e) });
+        res.status(Number.isInteger(e?.status) ? e.status : 503).json({ error: e?.message || String(e) });
+    }
+}
+async function proxySouls(req, res) {
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const result = await httpJson(srv.baseUrl, '/souls', req.method === 'POST' ? 'POST' : 'GET', req.method === 'POST'
+            ? { soul_id: String(req.body?.soul_id || ''), use_existing: Boolean(req.body?.use_existing) }
+            : undefined);
+        res.json(result);
+    }
+    catch (e) {
+        res.status(Number.isInteger(e?.status) ? e.status : 503).json({ error: e?.message || String(e) });
     }
 }
 // ---------------------
@@ -25553,6 +25569,10 @@ function registerLocalHealth(router) {
 function registerOwner(router) {
     router.get('/owner', proxyOwner);
     router.post('/owner', proxyOwner);
+}
+function registerSouls(router) {
+    router.get('/souls', proxySouls);
+    router.post('/souls', proxySouls);
 }
 async function proxyNarrativeSuggestion(req, res) {
     const userId = String(req.body?.userId || "");

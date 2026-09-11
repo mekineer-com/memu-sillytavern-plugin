@@ -1394,7 +1394,7 @@ async function httpJson(baseUrl: string, urlPath: string, method: string, body?:
   try { parsed = txt ? JSON.parse(txt) : null; } catch { /* ignore */ }
   if (!r.ok) {
     const msg = (parsed && (parsed.detail || parsed.error)) ? String(parsed.detail || parsed.error) : (txt || `HTTP ${r.status}`);
-    throw new Error(msg);
+    throw Object.assign(new Error(msg), { status: r.status });
   }
   return parsed;
 }
@@ -1913,7 +1913,25 @@ export async function proxyOwner(req: Request, res: Response): Promise<void> {
     );
     res.json(result);
   } catch (e: any) {
-    res.status(503).json({ error: e?.message || String(e) });
+    res.status(Number.isInteger(e?.status) ? e.status : 503).json({ error: e?.message || String(e) });
+  }
+}
+
+export async function proxySouls(req: Request, res: Response): Promise<void> {
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const result = await httpJson(
+      srv.baseUrl,
+      '/souls',
+      req.method === 'POST' ? 'POST' : 'GET',
+      req.method === 'POST'
+        ? { soul_id: String(req.body?.soul_id || ''), use_existing: Boolean(req.body?.use_existing) }
+        : undefined,
+    );
+    res.json(result);
+  } catch (e: any) {
+    res.status(Number.isInteger(e?.status) ? e.status : 503).json({ error: e?.message || String(e) });
   }
 }
 
@@ -1974,6 +1992,11 @@ export function registerLocalHealth(router: Router): void {
 export function registerOwner(router: Router): void {
   router.get('/owner', proxyOwner);
   router.post('/owner', proxyOwner);
+}
+
+export function registerSouls(router: Router): void {
+  router.get('/souls', proxySouls);
+  router.post('/souls', proxySouls);
 }
 
 export async function proxyNarrativeSuggestion(req: Request, res: Response): Promise<void> {
