@@ -23688,6 +23688,7 @@ async function init(router) {
     (0, memu_endpoint_1.registerNarrativeSuggestion)(router);
     (0, memu_endpoint_1.registerRelationships)(router);
     (0, memu_endpoint_1.registerLocalHealth)(router);
+    (0, memu_endpoint_1.registerOwner)(router);
     registerMetaEndpoints(router);
     (0, memu_endpoint_1.registerServerControl)(router);
     console.log(chalk_1.default.green(consts_1.MODULE_NAME), 'Plugin initialized');
@@ -23739,6 +23740,7 @@ exports.proxyConversationTurn = proxyConversationTurn;
 exports.proxyConversationTurnUndo = proxyConversationTurnUndo;
 exports.proxyScopeStorageProbe = proxyScopeStorageProbe;
 exports.proxyLocalHealth = proxyLocalHealth;
+exports.proxyOwner = proxyOwner;
 exports.registerMemorizeConversation = registerMemorizeConversation;
 exports.registerGetTaskStatus = registerGetTaskStatus;
 exports.proxyCancelMemorize = proxyCancelMemorize;
@@ -23749,6 +23751,7 @@ exports.registerConversationTurn = registerConversationTurn;
 exports.registerConversationTurnUndo = registerConversationTurnUndo;
 exports.registerScopeStorageProbe = registerScopeStorageProbe;
 exports.registerLocalHealth = registerLocalHealth;
+exports.registerOwner = registerOwner;
 exports.proxyNarrativeSuggestion = proxyNarrativeSuggestion;
 exports.registerNarrativeSuggestion = registerNarrativeSuggestion;
 exports.proxyListRelationships = proxyListRelationships;
@@ -25493,6 +25496,17 @@ async function proxyLocalHealth(_req, res) {
         res.status(500).json({ ok: false, error: e?.message || String(e) });
     }
 }
+async function proxyOwner(req, res) {
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const result = await httpJson(srv.baseUrl, '/owner', req.method === 'POST' ? 'POST' : 'GET', req.method === 'POST' ? { user_id: String(req.body?.user_id || '') } : undefined);
+        res.json(result);
+    }
+    catch (e) {
+        res.status(503).json({ error: e?.message || String(e) });
+    }
+}
 // ---------------------
 // Route registrations
 // ---------------------
@@ -25535,6 +25549,10 @@ function registerScopeStorageProbe(router) {
 }
 function registerLocalHealth(router) {
     router.get('/health', proxyLocalHealth);
+}
+function registerOwner(router) {
+    router.get('/owner', proxyOwner);
+    router.post('/owner', proxyOwner);
 }
 async function proxyNarrativeSuggestion(req, res) {
     const userId = String(req.body?.userId || "");

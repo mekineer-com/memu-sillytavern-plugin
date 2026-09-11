@@ -1901,6 +1901,22 @@ export async function proxyLocalHealth(_req: Request, res: Response): Promise<vo
   }
 }
 
+export async function proxyOwner(req: Request, res: Response): Promise<void> {
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const result = await httpJson(
+      srv.baseUrl,
+      '/owner',
+      req.method === 'POST' ? 'POST' : 'GET',
+      req.method === 'POST' ? { user_id: String(req.body?.user_id || '') } : undefined,
+    );
+    res.json(result);
+  } catch (e: any) {
+    res.status(503).json({ error: e?.message || String(e) });
+  }
+}
+
 // ---------------------
 // Route registrations
 // ---------------------
@@ -1953,6 +1969,11 @@ export function registerScopeStorageProbe(router: Router): void {
 
 export function registerLocalHealth(router: Router): void {
   router.get('/health', proxyLocalHealth);
+}
+
+export function registerOwner(router: Router): void {
+  router.get('/owner', proxyOwner);
+  router.post('/owner', proxyOwner);
 }
 
 export async function proxyNarrativeSuggestion(req: Request, res: Response): Promise<void> {

@@ -85,6 +85,7 @@ export declare function proxyConversationTurn(req: Request, res: Response): Prom
 export declare function proxyConversationTurnUndo(req: Request, res: Response): Promise<void>;
 export declare function proxyScopeStorageProbe(req: Request, res: Response): Promise<void>;
 export declare function proxyLocalHealth(_req: Request, res: Response): Promise<void>;
+export declare function proxyOwner(req: Request, res: Response): Promise<void>;
 export declare function registerMemorizeConversation(router: Router): void;
 export declare function registerGetTaskStatus(router: Router): void;
 export declare function proxyCancelMemorize(req: Request, res: Response): Promise<void>;
@@ -95,6 +96,7 @@ export declare function registerConversationTurn(router: Router): void;
 export declare function registerConversationTurnUndo(router: Router): void;
 export declare function registerScopeStorageProbe(router: Router): void;
 export declare function registerLocalHealth(router: Router): void;
+export declare function registerOwner(router: Router): void;
 export declare function proxyNarrativeSuggestion(req: Request, res: Response): Promise<void>;
 export declare function registerNarrativeSuggestion(router: Router): void;
 export declare function proxyListRelationships(req: Request, res: Response): Promise<void>;
