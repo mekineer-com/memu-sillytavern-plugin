@@ -923,7 +923,8 @@ function buildMemuPayloadForLocal(
 ): any {
 
   // Profiles keyed by step name. Server's config.json provides defaults for anything not sent.
-  const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "consolidation", "embeddings"];
+  // Server config owns the live embedding space until model changes can re-embed each Soul database.
+  const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "consolidation"];
 
   function resolveOrSkip(id: string, step: string): NonNullable<ReturnType<typeof resolveProfileCredentials>> {
     const cred = resolveProfileCredentials(id);
