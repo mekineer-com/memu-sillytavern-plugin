@@ -12,6 +12,7 @@ Can be run on Python 3.12 by changing versions in the memU config files includin
 Compatibility includes Alpine 3.23.
 
 Community fork (unofficial).<br>
+Part of [OpenAlma](https://github.com/mekineer-com/OpenAlma); project-wide questions and ideas belong in [OpenAlma Discussions](https://github.com/mekineer-com/OpenAlma/discussions).<br>
 Upstream: (https://github.com/NevaMind-AI/memu-sillytavern-plugin)<br>
 Purpose: SillyTavern integration + memU service improvements (Local/API routing, build fixes, etc.).<br>
 Not affiliated with upstream.<br>
