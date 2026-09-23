@@ -6,12 +6,9 @@
     "memory_extract": "default",
     "category_update": "default",
     "reflection": "default",
-    "ranking": "default",
-    "embeddings": "default"
+    "ranking": "default"
   },
   "serverPath": "/path/to/mcp-memu-server",
   "autoStartServer": true,
-  "embeddingModelSelected": "text-embedding-3-large",
-  "embeddingModel": "text-embedding-3-large",
   "updatedAt": "2026-03-07T00:00:00.000Z"
 }

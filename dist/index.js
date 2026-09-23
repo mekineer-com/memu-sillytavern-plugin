@@ -24611,11 +24611,6 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
             continue;
         const cred = resolveOrSkip(id, s);
         const profile = buildProfile(cred);
-        if (s === "embeddings") {
-            profile.embed_model = String(cfg.embeddingModelSelected || cfg.embeddingModelManual || "").trim();
-            profile.embed_batch_size = Number(cfg.embeddingBatchSize || 25);
-            llm_profiles["embedding"] = profile;
-        }
         llm_profiles[s] = profile;
     }
     const memorize_config = {};

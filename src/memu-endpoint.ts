@@ -955,11 +955,6 @@ function buildMemuPayloadForLocal(
     if (!id) continue;
     const cred = resolveOrSkip(id, s);
     const profile = buildProfile(cred);
-    if (s === "embeddings") {
-      profile.embed_model = String((cfg as any).embeddingModelSelected || (cfg as any).embeddingModelManual || "").trim();
-      profile.embed_batch_size = Number((cfg as any).embeddingBatchSize || 25);
-      llm_profiles["embedding"] = profile;
-    }
     llm_profiles[s] = profile;
   }
 
