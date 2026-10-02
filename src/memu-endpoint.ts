@@ -1389,8 +1389,9 @@ async function httpJson(baseUrl: string, urlPath: string, method: string, body?:
   let parsed: any = null;
   try { parsed = txt ? JSON.parse(txt) : null; } catch { /* ignore */ }
   if (!r.ok) {
-    const msg = (parsed && (parsed.detail || parsed.error)) ? String(parsed.detail || parsed.error) : (txt || `HTTP ${r.status}`);
-    throw Object.assign(new Error(msg), { status: r.status });
+    const detail = parsed?.detail || parsed?.error;
+    const msg = typeof detail?.message === 'string' ? detail.message : detail ? String(detail) : (txt || `HTTP ${r.status}`);
+    throw Object.assign(new Error(msg), { status: r.status, detail });
   }
   return parsed;
 }
@@ -1631,7 +1632,7 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     );
     res.json(resp);
   } catch (e: any) {
-    res.status(500).json({ error: e?.message || String(e) });
+    res.status(Number.isInteger(e?.status) ? e.status : 500).json({ error: e?.detail || e?.message || String(e) });
   }
 }
 
@@ -1691,7 +1692,7 @@ export async function proxyConversationTurn(req: Request, res: Response): Promis
     );
     res.json(resp);
   } catch (e: any) {
-    res.status(500).json({ error: e?.message || String(e) });
+    res.status(Number.isInteger(e?.status) ? e.status : 500).json({ error: e?.detail || e?.message || String(e) });
   }
 }
 

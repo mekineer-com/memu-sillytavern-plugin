@@ -25028,8 +25028,9 @@ async function httpJson(baseUrl, urlPath, method, body) {
     }
     catch { /* ignore */ }
     if (!r.ok) {
-        const msg = (parsed && (parsed.detail || parsed.error)) ? String(parsed.detail || parsed.error) : (txt || `HTTP ${r.status}`);
-        throw Object.assign(new Error(msg), { status: r.status });
+        const detail = parsed?.detail || parsed?.error;
+        const msg = typeof detail?.message === 'string' ? detail.message : detail ? String(detail) : (txt || `HTTP ${r.status}`);
+        throw Object.assign(new Error(msg), { status: r.status, detail });
     }
     return parsed;
 }
@@ -25246,7 +25247,7 @@ async function proxyConversationRetrieve(req, res) {
         res.json(resp);
     }
     catch (e) {
-        res.status(500).json({ error: e?.message || String(e) });
+        res.status(Number.isInteger(e?.status) ? e.status : 500).json({ error: e?.detail || e?.message || String(e) });
     }
 }
 async function proxyConversationTurn(req, res) {
@@ -25305,7 +25306,7 @@ async function proxyConversationTurn(req, res) {
         res.json(resp);
     }
     catch (e) {
-        res.status(500).json({ error: e?.message || String(e) });
+        res.status(Number.isInteger(e?.status) ? e.status : 500).json({ error: e?.detail || e?.message || String(e) });
     }
 }
 async function proxyConversationTurnUndo(req, res) {
