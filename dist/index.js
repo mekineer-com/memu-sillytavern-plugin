@@ -25106,7 +25106,7 @@ async function proxyMemorizeConversation(req, res) {
     }
     catch (e) {
         const err = String(e?.message || e || "").trim() || "Memorize start failed";
-        res.status(502).json({ error: err });
+        res.status(Number.isInteger(e?.status) ? e.status : 502).json({ error: e?.detail || err });
         return;
     }
     const taskId = makeTaskId();
@@ -25586,7 +25586,7 @@ async function proxyNarrativeSuggestion(req, res) {
         res.json(resp ?? {});
     }
     catch (e) {
-        res.status(500).json({ error: e?.message || String(e) });
+        res.status(Number.isInteger(e?.status) ? e.status : 500).json({ error: e?.detail || e?.message || String(e) });
     }
 }
 function registerNarrativeSuggestion(router) {

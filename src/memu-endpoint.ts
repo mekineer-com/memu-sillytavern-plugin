@@ -1474,7 +1474,7 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
     await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
   } catch (e: any) {
     const err = String(e?.message || e || "").trim() || "Memorize start failed";
-    res.status(502).json({ error: err });
+    res.status(Number.isInteger(e?.status) ? e.status : 502).json({ error: e?.detail || err });
     return;
   }
   const taskId = makeTaskId();
@@ -2015,7 +2015,7 @@ export async function proxyNarrativeSuggestion(req: Request, res: Response): Pro
     );
     res.json(resp ?? {});
   } catch (e: any) {
-    res.status(500).json({ error: e?.message || String(e) });
+    res.status(Number.isInteger(e?.status) ? e.status : 500).json({ error: e?.detail || e?.message || String(e) });
   }
 }
 
