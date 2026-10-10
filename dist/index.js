@@ -25086,19 +25086,32 @@ async function proxyMemorizeConversation(req, res) {
     pruneLocalTasks();
     try {
         const cfg = readPluginConfig();
+        const settings = req.body?.runtimeSettings;
+        const runtimeCfg = settings ? sanitizeIncomingConfig({
+            ...cfg,
+            useServerSettings: settings.useServerSettings,
+            useClaudeCode: settings.useClaudeCode,
+            defaultProfileId: settings.defaultProfileId,
+            stepProfileId: settings.stepProfileId,
+        }) : cfg;
         const namedConversation = conversation.map((msg) => {
             if (!msg || typeof msg !== "object")
                 return msg;
+            if (Object.prototype.hasOwnProperty.call(msg, "name"))
+                return msg;
             if (msg.role === "user" && userName)
                 return { ...msg, name: userName };
-            if (msg.role === "assistant" && soulName)
+            if ((msg.role === "assistant" || msg.role === "soul") && soulName)
                 return { ...msg, name: soulName };
             return msg;
         });
-        const srv = await ensureLocalServer(cfg);
-        const payload = buildMemuPayloadForLocal(cfg, userId, characterId, namedConversation, {
+        const payload = buildMemuPayloadForLocal(runtimeCfg, userId, characterId, namedConversation, {
             conversationId,
         });
+        payload.source_message_count = req.body?.source_message_count;
+        payload.intent = req.body?.intent;
+        payload.chat_name = req.body?.chat_name;
+        const srv = await ensureLocalServer(cfg);
         const query = new URLSearchParams();
         if (rebuild)
             query.set('rebuild', 'true');
@@ -25108,20 +25121,28 @@ async function proxyMemorizeConversation(req, res) {
             query.set('tail', 'true');
         const queryString = query.toString();
         const qs = queryString ? `?${queryString}` : '';
-        await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
+        const admission = await httpJson(srv.baseUrl, `/memorize${qs}`, 'POST', payload);
+        const status = admission?.status;
+        if (["waiting_for_import", "deferred", "nothing_to_memorize", "published", "coalesced"].includes(status)) {
+            res.json({ status });
+            return;
+        }
+        if (status !== "accepted" && status !== "started") {
+            throw new Error(`Unexpected Memorize admission status: ${String(status)}`);
+        }
+        const taskId = makeTaskId();
+        localTasks.set(taskId, {
+            createdAt: Date.now(),
+            userId,
+            soulId: characterId,
+        });
+        res.json({ status, taskId });
     }
     catch (e) {
         const err = String(e?.message || e || "").trim() || "Memorize start failed";
         res.status(Number.isInteger(e?.status) ? e.status : 502).json({ error: e?.detail || err });
         return;
     }
-    const taskId = makeTaskId();
-    localTasks.set(taskId, {
-        createdAt: Date.now(),
-        userId,
-        soulId: characterId,
-    });
-    res.json({ taskId });
 }
 async function proxyGetTaskStatus(req, res) {
     const taskId = String(req.body?.taskId || "");
@@ -25141,7 +25162,7 @@ async function proxyGetTaskStatus(req, res) {
             const progress = Number.isFinite(current) && Number.isFinite(total)
                 ? { current, total, ...(phase ? { phase } : {}) }
                 : undefined;
-            res.json({ status: "PROCESSING", ...(progress ? { progress } : {}) });
+            res.json({ status: phase === "accepted" ? "PENDING" : "PROCESSING", ...(progress ? { progress } : {}) });
             return;
         }
         const lastResult = String(p?.last_result || "").trim().toLowerCase();

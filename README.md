@@ -1,6 +1,8 @@
 <div align="center">
 
-When you enter a new chat, memU will start to memorize for the entire chat, so be careful not to enter a huge chat or you will have a large token spend.
+Memorize uses the saved main chat. The server decides automatic eligibility after
+a reply is saved; merely opening a chat does not start paid processing. Waiting,
+deferred, publication-only and coalesced requests do not create local tasks.
 
 For any issues or suggestions, please contact mekineer@gmail.com.
 
