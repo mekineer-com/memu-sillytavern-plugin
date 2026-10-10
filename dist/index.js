@@ -23816,6 +23816,8 @@ function warnOnce(key, msg, ttlMs = 30000) {
 const CONFIG_FILENAME = "memu-plugin.config.json";
 const DEFAULT_CONFIG = {
     version: 4,
+    useServerSettings: true,
+    useClaudeCode: false,
     // In local mode, "default" means: the currently selected SillyTavern connection profile.
     defaultProfileId: "default",
     stepProfileId: {},
@@ -23899,6 +23901,8 @@ function sanitizeIncomingConfig(obj) {
         ...(obj && typeof obj === "object" ? obj : {}),
     };
     cfg.version = 4;
+    cfg.useServerSettings = cfg.useServerSettings !== false;
+    cfg.useClaudeCode = cfg.useClaudeCode === true;
     cfg.defaultProfileId =
         typeof cfg.defaultProfileId === "string" && cfg.defaultProfileId.trim()
             ? cfg.defaultProfileId.trim()
@@ -24581,7 +24585,7 @@ function mapSTProviderToMemU(provider) {
     return { provider: 'openai', provider_hint: p };
 }
 function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) {
-    // Profiles keyed by step name. Server's config.json provides defaults for anything not sent.
+    // Unset steps inherit ST's default profile when API overrides are active.
     // Server config owns the live embedding space until model changes can re-embed each Soul database.
     const steps = ["preprocess", "memory_extract", "category_update", "reflection", "consolidation"];
     function resolveOrSkip(id, step) {
@@ -24601,11 +24605,12 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
         };
     }
     const llm_profiles = {};
-    if (cfg.defaultProfileId) {
+    const useApiProfiles = cfg.useServerSettings === false && !cfg.useClaudeCode;
+    if (useApiProfiles && cfg.defaultProfileId) {
         const cred = resolveOrSkip(cfg.defaultProfileId, "default");
         llm_profiles["default"] = buildProfile(cred);
     }
-    for (const s of steps) {
+    for (const s of useApiProfiles ? steps : []) {
         const id = cfg.stepProfileId?.[s];
         if (!id)
             continue;
@@ -24625,6 +24630,7 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
         retrieve_config.sufficiency_check_llm_profile = "reflection";
     const payload = {
         user: { user_id: userId, soul_id: characterId },
+        ...(cfg.useServerSettings === false ? { claude_code: cfg.useClaudeCode } : {}),
         ...(Object.keys(llm_profiles).length ? { llm_profiles } : {}),
         ...(Object.keys(memorize_config).length ? { memorize_config } : {}),
         ...(Object.keys(retrieve_config).length ? { retrieve_config } : {}),
@@ -25511,8 +25517,8 @@ async function proxySouls(req, res) {
     try {
         const cfg = readPluginConfig();
         const srv = await ensureLocalServer(cfg);
-        const result = await httpJson(srv.baseUrl, '/souls', req.method === 'POST' ? 'POST' : 'GET', req.method === 'POST'
-            ? { soul_id: String(req.body?.soul_id || ''), use_existing: Boolean(req.body?.use_existing) }
+        const result = await httpJson(srv.baseUrl, req.params.soulId ? `/souls/${encodeURIComponent(String(req.params.soulId))}` : '/souls', req.method === 'POST' ? 'POST' : 'GET', req.method === 'POST'
+            ? { soul_id: String(req.body?.soul_id || ''), use_existing: Boolean(req.body?.use_existing), ...(req.body?.user_name !== undefined ? { user_name: req.body.user_name } : {}) }
             : undefined);
         res.json(result);
     }
@@ -25569,6 +25575,7 @@ function registerOwner(router) {
 }
 function registerSouls(router) {
     router.get('/souls', proxySouls);
+    router.get('/souls/:soulId', proxySouls);
     router.post('/souls', proxySouls);
 }
 async function proxyNarrativeSuggestion(req, res) {

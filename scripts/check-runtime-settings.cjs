@@ -73,3 +73,27 @@ for (const mode of [{ useServerSettings: true }, { useServerSettings: false, use
 }
 assert.throws(() => context.buildMemuPayloadForLocal(context.sanitizeIncomingConfig({ ...saved, useServerSettings: false }), 'TestOwner', 'TestSoul'), /Credential resolution/);
 console.log('Runtime defaults, explicit modes, profile mapping, credential omission and saved-choice restoration pass.');
+
+const soulContext = {
+  exports: {}, readPluginConfig: () => ({}), ensureLocalServer: async () => ({ baseUrl: 'http://test.invalid' }),
+  httpJson: async (_url, route, method, body) => ({ route, method, body }),
+};
+vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(', '// ---------------------')
+  + slice('export function registerSouls(', 'export async function proxyNarrativeSuggestion('), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS },
+}).outputText, soulContext);
+(async () => {
+  const routes = [];
+  soulContext.exports.registerSouls({ get: route => routes.push(route), post: route => routes.push(route) });
+  assert(routes.includes('/souls/:soulId'));
+  let result;
+  const res = { json: value => { result = value; }, status() { assert.fail('Unexpected proxy failure'); } };
+  for (const user_name of [undefined, 'TestOwner']) {
+    await soulContext.exports.proxySouls({ method: 'POST', params: {}, body: { soul_id: 'TestSoul', ...(user_name !== undefined ? { user_name } : {}) } }, res);
+    assert.equal(result.body.soul_id, 'TestSoul'); assert.equal(result.body.user_name, user_name);
+    assert.equal(Object.hasOwn(result.body, 'user_name'), user_name !== undefined);
+  }
+  await soulContext.exports.proxySouls({ method: 'GET', params: { soulId: 'Test Soul' } }, res);
+  assert.equal(result.route, '/souls/Test%20Soul'); assert.equal(result.method, 'GET'); assert.equal(result.body, undefined);
+  console.log('Soul creation forwards optional binding; metadata GET uses the scoped route.');
+})().catch(error => { console.error(error); process.exitCode = 1; });

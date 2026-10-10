@@ -3,6 +3,8 @@ import type { Request, Response } from "express";
 type MemuStep = 'preprocess' | 'memory_extract' | 'category_update' | 'reflection' | 'consolidation' | 'embeddings';
 interface MemuPluginConfig {
     version: number;
+    useServerSettings: boolean;
+    useClaudeCode: boolean;
     defaultProfileId: string;
     stepProfileId: Partial<Record<MemuStep, string>>;
     updatedAt: string;

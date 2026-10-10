@@ -1928,10 +1928,10 @@ export async function proxySouls(req: Request, res: Response): Promise<void> {
     const srv = await ensureLocalServer(cfg);
     const result = await httpJson(
       srv.baseUrl,
-      '/souls',
+      req.params.soulId ? `/souls/${encodeURIComponent(String(req.params.soulId))}` : '/souls',
       req.method === 'POST' ? 'POST' : 'GET',
       req.method === 'POST'
-        ? { soul_id: String(req.body?.soul_id || ''), use_existing: Boolean(req.body?.use_existing) }
+        ? { soul_id: String(req.body?.soul_id || ''), use_existing: Boolean(req.body?.use_existing), ...(req.body?.user_name !== undefined ? { user_name: req.body.user_name } : {}) }
         : undefined,
     );
     res.json(result);
@@ -2001,6 +2001,7 @@ export function registerOwner(router: Router): void {
 
 export function registerSouls(router: Router): void {
   router.get('/souls', proxySouls);
+  router.get('/souls/:soulId', proxySouls);
   router.post('/souls', proxySouls);
 }
 
