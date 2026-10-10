@@ -60,6 +60,8 @@ type MemuStep =
 
 interface MemuPluginConfig {
   version: number;
+  useServerSettings: boolean;
+  useClaudeCode: boolean;
   // In local mode, "default" means: the currently selected SillyTavern connection profile.
   defaultProfileId: string;
   stepProfileId: Partial<Record<MemuStep, string>>;
@@ -80,6 +82,8 @@ const CONFIG_FILENAME = "memu-plugin.config.json";
 
 const DEFAULT_CONFIG: MemuPluginConfig = {
   version: 4,
+  useServerSettings: true,
+  useClaudeCode: false,
   // In local mode, "default" means: the currently selected SillyTavern connection profile.
   defaultProfileId: "default",
   stepProfileId: {},
@@ -169,6 +173,8 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
     ...(obj && typeof obj === "object" ? obj : {}),
   };
   cfg.version = 4;
+  cfg.useServerSettings = cfg.useServerSettings !== false;
+  cfg.useClaudeCode = cfg.useClaudeCode === true;
   cfg.defaultProfileId =
     typeof cfg.defaultProfileId === "string" && cfg.defaultProfileId.trim()
       ? cfg.defaultProfileId.trim()
@@ -922,7 +928,7 @@ function buildMemuPayloadForLocal(
   opts?: { conversationId?: string }
 ): any {
 
-  // Profiles keyed by step name. Server's config.json provides defaults for anything not sent.
+  // Unset steps inherit ST's default profile when API overrides are active.
   // Server config owns the live embedding space until model changes can re-embed each Soul database.
   const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "consolidation"];
 
@@ -945,12 +951,13 @@ function buildMemuPayloadForLocal(
 
   const llm_profiles: Record<string, any> = {};
 
-  if (cfg.defaultProfileId) {
+  const useApiProfiles = cfg.useServerSettings === false && !cfg.useClaudeCode;
+  if (useApiProfiles && cfg.defaultProfileId) {
     const cred = resolveOrSkip(cfg.defaultProfileId, "default");
     llm_profiles["default"] = buildProfile(cred);
   }
 
-  for (const s of steps) {
+  for (const s of useApiProfiles ? steps : []) {
     const id = cfg.stepProfileId?.[s];
     if (!id) continue;
     const cred = resolveOrSkip(id, s);
@@ -968,6 +975,7 @@ function buildMemuPayloadForLocal(
 
   const payload: any = {
     user: { user_id: userId, soul_id: characterId },
+    ...(cfg.useServerSettings === false ? { claude_code: cfg.useClaudeCode } : {}),
     ...(Object.keys(llm_profiles).length ? { llm_profiles } : {}),
     ...(Object.keys(memorize_config).length ? { memorize_config } : {}),
     ...(Object.keys(retrieve_config).length ? { retrieve_config } : {}),
