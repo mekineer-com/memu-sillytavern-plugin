@@ -1728,16 +1728,16 @@ export async function proxyConversationTurnUndo(req: Request, res: Response): Pr
   const userId = String(req.body?.userId || "");
   const soulId = String(req.body?.soulId || "");
   const conversationId = String(req.body?.conversationId || "");
-  if (!userId || !soulId || !conversationId) {
-    res.status(400).json({ error: "Missing userId/soulId/conversationId" });
+  const turnId = String(req.body?.turnId || "");
+  if (!userId || !soulId || !conversationId || !turnId) {
+    res.status(400).json({ error: "Missing userId/soulId/conversationId/turnId" });
     return;
   }
 
   try {
     const cfg = readPluginConfig();
     const srv = await ensureLocalServer(cfg);
-    const payload = buildMemuPayloadForLocal(cfg, userId, soulId, undefined, { conversationId });
-    payload.user = { user_id: userId, soul_id: soulId };
+    const payload = { user: { user_id: userId, soul_id: soulId }, turn_id: turnId };
     const resp = await httpJson(
       srv.baseUrl,
       `/conversation/${encodeURIComponent(conversationId)}/turn/undo`,

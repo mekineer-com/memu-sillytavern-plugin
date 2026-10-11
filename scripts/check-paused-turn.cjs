@@ -6,7 +6,7 @@ const ts = require('typescript');
 // Exercise the existing proxies and HTTP decoder without starting ST or reading config.
 const source = fs.readFileSync(`${__dirname}/../src/memu-endpoint.ts`, 'utf8');
 const code = source.slice(source.indexOf('async function httpJson('), source.indexOf('// ---------------------------------', source.indexOf('async function httpJson(')))
-  + source.slice(source.indexOf('export async function proxyConversationRetrieve('), source.indexOf('export async function proxyConversationTurnUndo('))
+  + source.slice(source.indexOf('export async function proxyConversationRetrieve('), source.indexOf('export async function proxyScopeStorageProbe('))
   + source.slice(source.indexOf('export async function proxyMemorizeConversation('), source.indexOf('export async function proxyRetrieveDefaultCategories('))
   + source.slice(source.indexOf('export async function proxyNarrativeSuggestion('), source.indexOf('export function registerNarrativeSuggestion('));
 const detail = { code: 'soul_paused', message: 'Test Soul is paused. Retry in OpenAlma launcher.' };
@@ -91,4 +91,17 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
     assert.equal(body.status, last_result === 'success' ? 'SUCCESS' : 'FAILURE');
   }
   console.log('Saved metadata/names, captured runtime choices, truthful admissions and accepted/terminal polling pass.');
+  context.buildMemuPayloadForLocal = () => assert.fail('Undo must not resolve API profiles');
+  response = { status: 'restored' };
+  await context.exports.proxyConversationTurnUndo({ body: {
+    userId: 'TestOwner', soulId: 'TestSoul', conversationId: 'integrity:test-main', turnId: 'matching-turn',
+  } }, res);
+  assert.deepEqual(wire, { user: { user_id: 'TestOwner', soul_id: 'TestSoul' }, turn_id: 'matching-turn' });
+  assert.equal(body.status, 'restored');
+  context.ensureLocalServer = () => assert.fail('Missing turn ID must refuse before connecting');
+  await context.exports.proxyConversationTurnUndo({ body: {
+    userId: 'TestOwner', soulId: 'TestSoul', conversationId: 'integrity:test-main',
+  } }, res);
+  assert.equal(httpStatus, 400);
+  console.log('Undo forwards the exact reply ID without API-profile resolution; unqualified requests refuse.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
