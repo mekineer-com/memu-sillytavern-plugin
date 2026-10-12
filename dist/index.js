@@ -25560,7 +25560,9 @@ async function proxySouls(req, res) {
     try {
         const cfg = readPluginConfig();
         const srv = await ensureLocalServer(cfg);
-        const result = await httpJson(srv.baseUrl, req.params.soulId ? `/souls/${encodeURIComponent(String(req.params.soulId))}` : '/souls', req.method === 'POST' ? 'POST' : 'GET', req.method === 'POST'
+        const result = await httpJson(srv.baseUrl, req.params.soulId
+            ? `/souls/${encodeURIComponent(String(req.params.soulId))}${req.query?.include_narrative === 'true' ? '?include_narrative=true' : ''}`
+            : '/souls', req.method === 'POST' ? 'POST' : 'GET', req.method === 'POST'
             ? { soul_id: String(req.body?.soul_id || ''), use_existing: Boolean(req.body?.use_existing), ...(req.body?.user_name !== undefined ? { user_name: req.body.user_name } : {}) }
             : undefined);
         res.json(result);
@@ -25634,8 +25636,19 @@ async function proxyNarrativeSuggestion(req, res) {
     }
     try {
         const cfg = readPluginConfig();
+        const settings = req.body?.runtimeSettings;
+        const runtimeCfg = sanitizeIncomingConfig({
+            ...cfg,
+            ...(settings ? {
+                useServerSettings: settings.useServerSettings,
+                useClaudeCode: settings.useClaudeCode,
+                defaultProfileId: settings.defaultProfileId,
+            } : {}),
+            stepProfileId: {},
+        });
+        const payload = buildMemuPayloadForLocal(runtimeCfg, userId, soulId);
         const srv = await ensureLocalServer(cfg);
-        const resp = await httpJson(srv.baseUrl, `/souls/${encodeURIComponent(soulId)}/narrative_suggestion`, "POST", { user_id: userId, suggestion });
+        const resp = await httpJson(srv.baseUrl, `/souls/${encodeURIComponent(soulId)}/narrative_suggestion`, "POST", { ...payload, user_id: userId, suggestion });
         res.json(resp ?? {});
     }
     catch (e) {

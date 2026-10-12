@@ -9,7 +9,8 @@ const slice = (start, end) => source.slice(source.indexOf(start), source.indexOf
 const code = slice('const DEFAULT_CONFIG', '// -----------------------------')
   + slice('function sanitizeIncomingConfig(', 'let _cachedPluginConfig')
   + slice('export function setPluginConfig(', '// -----------------------------')
-  + slice('function buildMemuPayloadForLocal(', '// ---------------------------------');
+  + slice('function buildMemuPayloadForLocal(', '// ---------------------------------')
+  + slice('export async function proxyNarrativeSuggestion(', 'export function registerNarrativeSuggestion(');
 let resolved = [];
 let persisted;
 const context = {
@@ -95,5 +96,58 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   }
   await soulContext.exports.proxySouls({ method: 'GET', params: { soulId: 'Test Soul' } }, res);
   assert.equal(result.route, '/souls/Test%20Soul'); assert.equal(result.method, 'GET'); assert.equal(result.body, undefined);
-  console.log('Soul creation forwards optional binding; metadata GET uses the scoped route.');
+  await soulContext.exports.proxySouls({ method: 'GET', params: { soulId: 'Test Soul' }, query: { include_narrative: 'true' } }, res);
+  assert.equal(result.route, '/souls/Test%20Soul?include_narrative=true');
+  await soulContext.exports.proxySouls({ method: 'GET', params: { soulId: 'Test Soul' }, query: { include_narrative: 'false' } }, res);
+  assert.equal(result.route, '/souls/Test%20Soul');
+  console.log('Soul creation forwards optional binding; live narrative GET is explicitly opt-in.');
+
+  const storedSettings = { useServerSettings: true, useClaudeCode: false, defaultProfileId: 'later-default',
+    stepProfileId: { reflection: 'broken-unused', category_update: 'also-broken' } };
+  context.readPluginConfig = () => storedSettings;
+  context.ensureLocalServer = async () => ({ baseUrl: 'http://test.invalid' });
+  let suggestionWire, suggestionResult, status;
+  context.httpJson = async (_url, route, method, payload) => {
+    suggestionWire = normalize(payload);
+    assert.equal(route, '/souls/TestSoul/narrative_suggestion'); assert.equal(method, 'POST');
+    return { narrative_self: 'Fictional considered result' };
+  };
+  context.resolveProfileCredentials = id => {
+    resolved.push(id);
+    if (id !== 'captured-api') throw new Error(`Broken unused profile ${id}`);
+    return { ok: true, provider: 'openai', baseUrl: 'https://test.invalid/v1', key: 'fictional-key', model: id };
+  };
+  const suggestionRes = { json: value => { suggestionResult = value; }, status: value => { status = value; return suggestionRes; } };
+  const suggestionBody = { userId: 'TestOwner', soulId: 'TestSoul', suggestion: 'Fictional suggestion' };
+  for (const useServerSettings of [true, false]) {
+    for (const useClaudeCode of [true, false]) {
+      resolved = []; status = undefined;
+      await context.exports.proxyNarrativeSuggestion({ body: { ...suggestionBody, runtimeSettings: {
+        useServerSettings, useClaudeCode, defaultProfileId: 'captured-api', stepProfileId: { reflection: 'broken-unused' },
+      } } }, suggestionRes);
+      assert.equal(status, undefined);
+      assert.equal(suggestionResult.narrative_self, 'Fictional considered result');
+      assert.deepEqual(suggestionWire.user, { user_id: 'TestOwner', soul_id: 'TestSoul' });
+      assert.equal(suggestionWire.user_id, 'TestOwner'); assert.equal(suggestionWire.suggestion, 'Fictional suggestion');
+      if (!useServerSettings && !useClaudeCode) {
+        assert.deepEqual(resolved, ['captured-api']);
+        assert.deepEqual(Object.keys(suggestionWire.llm_profiles), ['default']);
+        assert.equal(suggestionWire.llm_profiles.default.chat_model, 'captured-api');
+      } else {
+        assert.deepEqual(resolved, []); assert.equal('llm_profiles' in suggestionWire, false);
+      }
+      assert.equal('claude_code' in suggestionWire, !useServerSettings);
+      if (!useServerSettings) assert.equal(suggestionWire.claude_code, useClaudeCode);
+      assert.equal('memorize_config' in suggestionWire, false); assert.equal('retrieve_config' in suggestionWire, false);
+    }
+  }
+  assert.deepEqual(storedSettings.stepProfileId, { reflection: 'broken-unused', category_update: 'also-broken' });
+  let releaseServer;
+  context.ensureLocalServer = () => new Promise(resolve => { releaseServer = resolve; });
+  const captured = { useServerSettings: false, useClaudeCode: false, defaultProfileId: 'captured-api', stepProfileId: { reflection: 'broken-unused' } };
+  const delayed = context.exports.proxyNarrativeSuggestion({ body: { ...suggestionBody, runtimeSettings: captured } }, suggestionRes);
+  captured.defaultProfileId = 'changed-after-send';
+  releaseServer({ baseUrl: 'http://test.invalid' }); await delayed;
+  assert.equal(suggestionWire.llm_profiles.default.chat_model, 'captured-api');
+  console.log('Suggestion uses captured default runtime only, skips unused profiles, and preserves choices through server waits.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
