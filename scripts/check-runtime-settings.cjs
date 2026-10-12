@@ -26,54 +26,17 @@ const context = {
 };
 vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
 const normalize = value => JSON.parse(JSON.stringify(value));
-const saved = { defaultProfileId: 'test-api', stepProfileId: { preprocess: 'test-preprocess', reflection: 'test-reflection', embeddings: 'unused' } };
-let cfg = context.sanitizeIncomingConfig(saved);
-assert.equal(cfg.useServerSettings, true);
-assert.equal(cfg.useClaudeCode, false);
-for (const bad of ['false', 0, null]) {
-  const sanitized = context.sanitizeIncomingConfig({ useServerSettings: bad, useClaudeCode: bad });
-  assert.equal(sanitized.useServerSettings, true);
-  assert.equal(sanitized.useClaudeCode, false);
-}
-const conversation = [{ role: 'user', content: 'Fictional message' }];
-for (const useServerSettings of [true, false]) {
-  for (const useClaudeCode of [false, true]) {
-    cfg = context.sanitizeIncomingConfig({ ...saved, useServerSettings, useClaudeCode });
-    resolved = [];
-    const payload = normalize(context.buildMemuPayloadForLocal(cfg, 'TestOwner', 'TestSoul', conversation, { conversationId: ' test-chat ' }));
-    assert.deepEqual(payload.user, { user_id: 'TestOwner', soul_id: 'TestSoul' });
-    assert.deepEqual(payload.conversation, conversation);
-    assert.equal(payload.conversation_id, 'test-chat');
-    if (useServerSettings || useClaudeCode) {
-      assert.deepEqual(resolved, []);
-      for (const field of ['llm_profiles', 'memorize_config', 'retrieve_config']) assert.equal(field in payload, false);
-      assert.equal(JSON.stringify(payload).includes('fictional-key'), false);
-    } else {
-      assert.deepEqual(resolved, ['test-api', 'test-preprocess', 'test-reflection']);
-      assert.equal(payload.llm_profiles.default.chat_model, 'test-api');
-      assert.equal(payload.llm_profiles.preprocess.api_key, 'fictional-key');
-      assert.deepEqual(payload.memorize_config, { preprocess_llm_profile: 'preprocess' });
-      assert.deepEqual(payload.retrieve_config, { sufficiency_check_llm_profile: 'reflection' });
-      assert.equal('embeddings' in payload.llm_profiles, false);
-    }
-    assert.equal('claude_code' in payload, !useServerSettings);
-    if (!useServerSettings) assert.equal(payload.claude_code, useClaudeCode);
-    const restored = context.sanitizeIncomingConfig({ ...cfg, useServerSettings: !useServerSettings });
-    assert.equal(restored.defaultProfileId, saved.defaultProfileId);
-    assert.deepEqual(normalize(restored.stepProfileId), saved.stepProfileId);
-    assert.equal(restored.useClaudeCode, useClaudeCode);
-    context.exports.setPluginConfig(restored);
-    assert.deepEqual(persisted.stepProfileId, saved.stepProfileId);
-    assert.equal(persisted.useServerSettings, !useServerSettings);
-    assert.equal(persisted.useClaudeCode, useClaudeCode);
-  }
-}
-context.resolveProfileCredentials = () => { throw new Error('Credential resolution must be skipped'); };
-for (const mode of [{ useServerSettings: true }, { useServerSettings: false, useClaudeCode: true }]) {
-  context.buildMemuPayloadForLocal(context.sanitizeIncomingConfig({ ...saved, ...mode }), 'TestOwner', 'TestSoul');
-}
-assert.throws(() => context.buildMemuPayloadForLocal(context.sanitizeIncomingConfig({ ...saved, useServerSettings: false }), 'TestOwner', 'TestSoul'), /Credential resolution/);
-console.log('Runtime defaults, explicit modes, profile mapping, credential omission and saved-choice restoration pass.');
+const saved = { serverPath: '/fictional/server', autoStartServer: false, embeddingBatchSize: 9,
+  useServerSettings: false, useClaudeCode: true, defaultProfileId: 'obsolete', stepProfileId: { reflection: 'obsolete' } };
+const cfg = context.sanitizeIncomingConfig(saved);
+context.exports.setPluginConfig(cfg);
+for (const key of ['useServerSettings', 'useClaudeCode', 'defaultProfileId', 'stepProfileId']) assert.equal(Object.hasOwn(persisted, key), false);
+assert.equal(persisted.serverPath, saved.serverPath); assert.equal(persisted.autoStartServer, false); assert.equal(persisted.embeddingBatchSize, 9);
+context.resolveProfileCredentials = () => assert.fail('Metadata must not resolve obsolete profiles');
+const payload = normalize(context.buildMemuPayloadForLocal(cfg, 'TestOwner', 'TestSoul', [{ role: 'user', content: 'Fictional message' }], { conversationId: ' test-chat ' }));
+assert.deepEqual(payload.user, { user_id: 'TestOwner', soul_id: 'TestSoul' }); assert.equal(payload.conversation_id, 'test-chat');
+for (const key of ['claude_code', 'llm_profiles', 'memorize_config', 'retrieve_config']) assert.equal(Object.hasOwn(payload, key), false);
+console.log('Operational config retained; obsolete model persistence and request overrides removed.');
 
 const soulContext = {
   exports: {}, readPluginConfig: () => ({}), ensureLocalServer: async () => ({ baseUrl: 'http://test.invalid' }),
@@ -102,52 +65,87 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   assert.equal(result.route, '/souls/Test%20Soul');
   console.log('Soul creation forwards optional binding; live narrative GET is explicitly opt-in.');
 
-  const storedSettings = { useServerSettings: true, useClaudeCode: false, defaultProfileId: 'later-default',
-    stepProfileId: { reflection: 'broken-unused', category_update: 'also-broken' } };
-  context.readPluginConfig = () => storedSettings;
+  context.readPluginConfig = () => cfg;
   context.ensureLocalServer = async () => ({ baseUrl: 'http://test.invalid' });
-  let suggestionWire, suggestionResult, status;
-  context.httpJson = async (_url, route, method, payload) => {
-    suggestionWire = normalize(payload);
-    assert.equal(route, '/souls/TestSoul/narrative_suggestion'); assert.equal(method, 'POST');
-    return { narrative_self: 'Fictional considered result' };
+  let suggestionWire;
+  context.httpJson = async (_url, route, method, body) => { suggestionWire = normalize(body); return { narrative_self: 'Considered' }; };
+  await context.exports.proxyNarrativeSuggestion({ body: { userId: 'TestOwner', soulId: 'TestSoul', suggestion: 'Fictional request' } }, { json() {}, status() { assert.fail('Unexpected suggestion error'); } });
+  assert.deepEqual(suggestionWire, { user: { user_id: 'TestOwner', soul_id: 'TestSoul' }, user_id: 'TestOwner', suggestion: 'Fictional request' });
+  console.log('Suggestions defer model selection to the canonical server mapping.');
+
+  const ownDir = '/fake/user-A';
+  const profiles = [
+    { id: 'a', name: 'A', mode: 'cc', api: 'openai', model: 'same-name', 'api-url': 'https://a.invalid/v1', 'secret-id': 'a-key', context_window_tokens: 8000 },
+    { id: 'b', name: 'B', mode: 'cc', api: 'openrouter', model: 'same-name', 'api-url': 'https://b.invalid/v1', 'secret-id': 'b-key' },
+    { id: 'unsupported', name: 'Native Claude', mode: 'cc', api: 'claude', model: 'native-model', 'api-url': 'https://claude.invalid' },
+    { id: 'local', name: 'Local Ollama compatible endpoint', mode: 'tc', api: 'ollama', model: 'local-model', 'api-url': 'http://localhost:11434' },
+  ];
+  const settings = { extension_settings: { connectionManager: { profiles } }, oai_settings: { openai_model: 'same-name', mistralai_model: 'mistral-native', custom_model: 'custom-local', custom_url: 'http://localhost:1234/v1' } };
+  const secrets = { api_key_openai: [{ id: 'a-key', value: 'own-a-key', active: true }], api_key_openrouter: [{ id: 'b-key', value: 'own-b-key', active: true }], api_key_mistralai: 'native-mistral-key' };
+  let canonical = { claude_code: false, llm: { provider: 'openai', chat_model: 'custom-base', api_key: 'base-key', embedding: { api_key: 'embedding-key' }, reply_models: { srmm: { source: 'config' }, other_apps: { source: 'config' } }, step_models: { reflection: { source: 'config' } } } };
+  let coreWrites = 0, reloads = 0, discoveries = 0;
+  const mapping = { exports: {}, URL, path: require('node:path'), fs: { readFileSync: fs.readFileSync },
+    getStRoot: () => require('node:path').resolve(__dirname, '../../..'),
+    readJsonIfExists: file => { assert(file.startsWith(ownDir + '/')); return file.endsWith('settings.json') ? settings : secrets; },
+    readPluginConfig: () => ({}), ensureLocalServer: async () => ({ baseUrl: 'http://core.invalid' }),
+    _stProviderUrls: { openai: 'https://openai.invalid/v1', mistralai: 'https://mistral.invalid/v1' },
+    resolveProfileBaseUrl: (_profile, normalized) => normalized.baseUrl,
+    sorted_unique: values => [...new Set(values)].sort(), MODEL_CACHE: new Map(), MODEL_CACHE_TTL_MS: 60000,
+    listModelsForProfileUncached: async (_id, _kind, credentials) => { discoveries++; assert(credentials.baseUrl); return { ok: true, models: ['same-name', 'second-model'], context_windows: { 'second-model': 7000 } }; },
+    httpJson: async (_base, route, method, body) => {
+      if (route === '/reload') { reloads++; return { ok: true }; }
+      assert.equal(route, '/config');
+      if (method === 'POST') { coreWrites++; if (body.claude_code !== undefined) canonical.claude_code = body.claude_code;
+        for (const [key, value] of Object.entries(body.llm || {})) canonical.llm[key] = key === 'st_selected' ? value : { ...canonical.llm[key], ...value }; }
+      return { ok: true, config: canonical };
+    },
   };
-  context.resolveProfileCredentials = id => {
-    resolved.push(id);
-    if (id !== 'captured-api') throw new Error(`Broken unused profile ${id}`);
-    return { ok: true, provider: 'openai', baseUrl: 'https://test.invalid/v1', key: 'fictional-key', model: id };
-  };
-  const suggestionRes = { json: value => { suggestionResult = value; }, status: value => { status = value; return suggestionRes; } };
-  const suggestionBody = { userId: 'TestOwner', soulId: 'TestSoul', suggestion: 'Fictional suggestion' };
-  for (const useServerSettings of [true, false]) {
-    for (const useClaudeCode of [true, false]) {
-      resolved = []; status = undefined;
-      await context.exports.proxyNarrativeSuggestion({ body: { ...suggestionBody, runtimeSettings: {
-        useServerSettings, useClaudeCode, defaultProfileId: 'captured-api', stepProfileId: { reflection: 'broken-unused' },
-      } } }, suggestionRes);
-      assert.equal(status, undefined);
-      assert.equal(suggestionResult.narrative_self, 'Fictional considered result');
-      assert.deepEqual(suggestionWire.user, { user_id: 'TestOwner', soul_id: 'TestSoul' });
-      assert.equal(suggestionWire.user_id, 'TestOwner'); assert.equal(suggestionWire.suggestion, 'Fictional suggestion');
-      if (!useServerSettings && !useClaudeCode) {
-        assert.deepEqual(resolved, ['captured-api']);
-        assert.deepEqual(Object.keys(suggestionWire.llm_profiles), ['default']);
-        assert.equal(suggestionWire.llm_profiles.default.chat_model, 'captured-api');
-      } else {
-        assert.deepEqual(resolved, []); assert.equal('llm_profiles' in suggestionWire, false);
-      }
-      assert.equal('claude_code' in suggestionWire, !useServerSettings);
-      if (!useServerSettings) assert.equal(suggestionWire.claude_code, useClaudeCode);
-      assert.equal('memorize_config' in suggestionWire, false); assert.equal('retrieve_config' in suggestionWire, false);
-    }
+  const mappingCode = slice('function normalizeProfile(', 'function resolveProfileBaseUrl(')
+    + slice('function _extractKeyValue(', '// Exported for meta endpoints')
+    + slice('function nativeModelFields(', 'let _externalSpawnCooldownUntilUnixMs');
+  vm.runInNewContext(ts.transpileModule(mappingCode, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, mapping);
+  let projection, status;
+  const mappingRes = { json: body => { projection = body; }, status: code => { status = code; return mappingRes; } };
+  const request = { method: 'GET', user: { directories: { root: ownDir } }, query: {} };
+  await mapping.exports.proxyModelMappings(request, mappingRes);
+  assert.equal(reloads, 1); assert.equal(discoveries, 0); assert.equal(coreWrites, 0);
+  assert.equal(projection.base_model.model, 'custom-base');
+  assert.equal(projection.providers.find(p => p.profile_id === 'unsupported').supported, false);
+  assert.equal(projection.providers.find(p => p.profile_id === 'local').supported, true);
+  assert(projection.providers.some(p => p.profile_id === 'native:cc:mistralai' && p.supported));
+  assert(!JSON.stringify(projection).includes('own-a-key')); assert(!JSON.stringify(projection).includes('embedding-key'));
+  const before = coreWrites;
+  await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { reply_models: { srmm: { source: 'configured', selection: { profile_id: 'a', provider: 'openai', model: 'same-name', api_key: 'forged-key' }, resolved: { api_key: 'forged-key' } } } } }, mappingRes);
+  assert.equal(coreWrites, before + 1); assert.equal(discoveries, 0);
+  assert.equal(canonical.llm.reply_models.srmm.resolved.api_key, 'own-a-key');
+  assert.equal(canonical.llm.reply_models.srmm.resolved.context_window_tokens, 8000);
+  assert.equal(Object.hasOwn(canonical.llm.reply_models.srmm.selection, 'api_key'), false);
+  assert.equal(canonical.llm.embedding.api_key, 'embedding-key'); assert.equal(canonical.llm.api_key, 'base-key');
+  await mapping.exports.proxyModelMappings({ ...request, query: { models: 'all' } }, mappingRes);
+  assert.equal(reloads, 1); assert.equal(coreWrites, before + 1); assert(discoveries > 1);
+  await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { step_models: { reflection: { source: 'configured', selection: { profile_id: 'b', provider: 'openrouter', model: 'second-model' } } } } }, mappingRes);
+  assert.equal(canonical.llm.step_models.reflection.resolved.api_key, 'own-b-key');
+  assert.equal(canonical.llm.step_models.reflection.resolved.context_window_tokens, 7000);
+  await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { st_selected: { selection: { profile_id: 'native:cc:custom', provider: 'custom', model: 'custom-local', base_url: 'http://localhost:1234/v1', context_window_tokens: 9000 } } } }, mappingRes);
+  assert.equal(canonical.llm.st_selected.resolved.api_key, ''); assert.equal(canonical.llm.st_selected.resolved.context_window_tokens, 9000);
+  await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { st_selected: { selection: { profile_id: 'native:tc:ollama', provider: 'ollama', model: 'local-model', base_url: 'http://localhost:11434' } } } }, mappingRes);
+  assert.equal(canonical.llm.st_selected.resolved.base_url, 'http://localhost:11434/v1'); assert.equal(canonical.llm.st_selected.resolved.api_key, '');
+  settings.oai_settings.reverse_proxy = 'https://proxy.invalid/v1';
+  settings.oai_settings.proxy_password = 'fictional-proxy-password';
+  await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { st_selected: { selection: { profile_id: 'a', provider: 'openai', model: 'same-name' } } } }, mappingRes);
+  assert.equal(canonical.llm.st_selected.resolved.base_url, settings.oai_settings.reverse_proxy);
+  assert.equal(canonical.llm.st_selected.resolved.api_key, 'fictional-proxy-password');
+  await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { st_selected: { selection: { profile_id: 'b', provider: 'openrouter', model: 'same-name' } } } }, mappingRes);
+  assert.equal(canonical.llm.st_selected.resolved.base_url, 'https://b.invalid/v1');
+  assert.equal(canonical.llm.st_selected.resolved.api_key, 'own-b-key');
+  for (const selection of [{ profile_id: 'unsupported', provider: 'claude', model: 'native-model' }, { profile_id: 'a', provider: 'openrouter', model: 'same-name' }, { profile_id: 'missing', provider: 'openai', model: 'same-name' }]) {
+    const beforeRefusal = coreWrites; status = undefined;
+    await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { reply_models: { srmm: { source: 'configured', selection } } } }, mappingRes);
+    assert.equal(status, 400); assert.equal(coreWrites, beforeRefusal);
   }
-  assert.deepEqual(storedSettings.stepProfileId, { reflection: 'broken-unused', category_update: 'also-broken' });
-  let releaseServer;
-  context.ensureLocalServer = () => new Promise(resolve => { releaseServer = resolve; });
-  const captured = { useServerSettings: false, useClaudeCode: false, defaultProfileId: 'captured-api', stepProfileId: { reflection: 'broken-unused' } };
-  const delayed = context.exports.proxyNarrativeSuggestion({ body: { ...suggestionBody, runtimeSettings: captured } }, suggestionRes);
-  captured.defaultProfileId = 'changed-after-send';
-  releaseServer({ baseUrl: 'http://test.invalid' }); await delayed;
-  assert.equal(suggestionWire.llm_profiles.default.chat_model, 'captured-api');
-  console.log('Suggestion uses captured default runtime only, skips unused profiles, and preserves choices through server waits.');
+  const beforeUnauthenticated = reloads;
+  await mapping.exports.proxyModelMappings({ method: 'GET' }, mappingRes);
+  assert.equal(status, 403); assert.equal(reloads, beforeUnauthenticated);
+  console.log('Actual mapping bridge: startup reload, scoped credentials, keyless/native transports, capacities, lazy catalog, masking and refusals pass.');
+
 })().catch(error => { console.error(error); process.exitCode = 1; });

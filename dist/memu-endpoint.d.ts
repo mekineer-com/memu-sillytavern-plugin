@@ -1,12 +1,7 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
-type MemuStep = 'preprocess' | 'memory_extract' | 'category_update' | 'reflection' | 'consolidation' | 'embeddings';
 interface MemuPluginConfig {
     version: number;
-    useServerSettings: boolean;
-    useClaudeCode: boolean;
-    defaultProfileId: string;
-    stepProfileId: Partial<Record<MemuStep, string>>;
     updatedAt: string;
     serverPath?: string;
     autoStartServer?: boolean;
@@ -39,6 +34,8 @@ export declare function listModelsForProfile(profileId: string, opts?: {
     models: string[];
     message?: string;
 }>;
+export declare function proxyModelMappings(req: Request, res: Response): Promise<void>;
+export declare function registerModelMappings(router: Router): void;
 type ExternalServerShutdownInfo = {
     draining: boolean;
     stopping: boolean;

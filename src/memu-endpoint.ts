@@ -50,21 +50,8 @@ function warnOnce(key: string, msg: string, ttlMs: number = 30_000): void {
   console.warn(chalk.yellow(MODULE_NAME), msg);
 }
 
-type MemuStep =
-  | 'preprocess'
-  | 'memory_extract'
-  | 'category_update'
-  | 'reflection'
-  | 'consolidation'
-  | 'embeddings';
-
 interface MemuPluginConfig {
   version: number;
-  useServerSettings: boolean;
-  useClaudeCode: boolean;
-  // In local mode, "default" means: the currently selected SillyTavern connection profile.
-  defaultProfileId: string;
-  stepProfileId: Partial<Record<MemuStep, string>>;
   updatedAt: string;
 
   // External memU server (mcp-memu-server) folder.
@@ -82,11 +69,6 @@ const CONFIG_FILENAME = "memu-plugin.config.json";
 
 const DEFAULT_CONFIG: MemuPluginConfig = {
   version: 4,
-  useServerSettings: true,
-  useClaudeCode: false,
-  // In local mode, "default" means: the currently selected SillyTavern connection profile.
-  defaultProfileId: "default",
-  stepProfileId: {},
   // External memU server folder (mcp-memu-server). In local mode we derive:
   //   baseUrl: http://127.0.0.1:8099  (or env MEMU_SERVER_URL)
   //   command: <serverPath>/run.py (spawned via python, no shell)
@@ -173,31 +155,7 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
     ...(obj && typeof obj === "object" ? obj : {}),
   };
   cfg.version = 4;
-  cfg.useServerSettings = cfg.useServerSettings !== false;
-  cfg.useClaudeCode = cfg.useClaudeCode === true;
-  cfg.defaultProfileId =
-    typeof cfg.defaultProfileId === "string" && cfg.defaultProfileId.trim()
-      ? cfg.defaultProfileId.trim()
-      : "default";
-
-  const out: Partial<Record<MemuStep, string>> = {};
-  const allowed: MemuStep[] = [
-    "preprocess",
-    "memory_extract",
-    "category_update",
-    "reflection",
-    "consolidation",
-    "embeddings",
-  ];
-  const incoming =
-    cfg.stepProfileId && typeof cfg.stepProfileId === "object"
-      ? (cfg.stepProfileId as any)
-      : {};
-  for (const k of allowed) {
-    const v = incoming[k];
-    if (typeof v === "string" && v.trim()) out[k] = v.trim();
-  }
-  cfg.stepProfileId = out;
+  for (const key of ['useServerSettings', 'useClaudeCode', 'defaultProfileId', 'stepProfileId']) delete (cfg as any)[key];
 
   // Normalize/derive embedding model fields (dropdown overrides manual).
   const selected = typeof (cfg as any).embeddingModelSelected === "string" ? String((cfg as any).embeddingModelSelected).trim() : "";
@@ -486,7 +444,7 @@ function resolveProfileBaseUrl(
       const reverseProxy = typeof (settings as any).reverse_proxy === 'string'
         ? (settings as any).reverse_proxy.trim()
         : '';
-      if (reverseProxy) return reverseProxy;
+      if (reverseProxy && ['openai', 'mistralai', 'deepseek', 'xai'].includes(provider)) return reverseProxy;
       if (provider === 'custom') {
         const customUrl = typeof (settings as any).custom_url === 'string'
           ? (settings as any).custom_url.trim()
@@ -554,6 +512,7 @@ function pickKeyForProvider(provider: string, secrets: AnyObject | null, secretI
       const v = _extractKeyValue((secrets as any)[k], secretId, true);
       if (v) return v;
     }
+    return null;
   }
 
   // Direct mapping for common providers (best-effort; ST key names can vary by version).
@@ -775,9 +734,9 @@ export async function listModelsForProfile(
   return result;
 }
 
-async function listModelsForProfileUncached(profileId: string, kind: ModelsKind): Promise<{ ok: boolean; models: string[]; message?: string }> {
+async function listModelsForProfileUncached(profileId: string, kind: ModelsKind, supplied?: NonNullable<ReturnType<typeof resolveProfileCredentials>>): Promise<{ ok: boolean; models: string[]; message?: string; context_windows?: Record<string, number> }> {
   try {
-    const cred = resolveProfileCredentials(profileId);
+    const cred = supplied || resolveProfileCredentials(profileId);
     if (!cred) return { ok: false, models: [], message: 'Profile not found.' };
     if (!cred.ok) return { ok: false, models: [], message: cred.message || 'Profile is missing base_url/model/api_key.' };
 
@@ -815,7 +774,12 @@ async function listModelsForProfileUncached(profileId: string, kind: ModelsKind)
       return { ok: false, models: [], message: msg };
     }
 
-    return { ok: true, models: uniq };
+    const context_windows: Record<string, number> = {};
+    for (const row of Array.isArray(json) ? json : json?.data || json?.models || []) {
+      const capacity = row?.context_length ?? row?.context_window_tokens ?? row?.context_window;
+      if (typeof row?.id === 'string' && Number.isInteger(capacity) && capacity > 0) context_windows[row.id] = capacity;
+    }
+    return { ok: true, models: uniq, context_windows };
   } catch (e: any) {
     return { ok: false, models: [], message: e?.message || 'Failed to load models.' };
   }
@@ -894,32 +858,6 @@ function resolveProfileCredentials(profileId: string): {
 
 let _loggedDefaultCategories = false;
 
-const _openaiCompatProviders = new Set([
-  'openai',
-  'openai-compatible',
-  'openai_compatible',
-  'openrouter',
-  'nanogpt',
-  'groq',
-  'together',
-  'togetherai',
-  'mistral',
-  'mistralai',
-  'deepseek',
-  'xai',
-  'perplexity',
-  'custom',
-  'vllm',
-  'lmstudio',
-  'ollama',
-]);
-
-function mapSTProviderToMemU(provider: string): { provider: string; provider_hint?: string } {
-  const p = String(provider || '').trim().toLowerCase();
-  if (!p || _openaiCompatProviders.has(p)) return { provider: 'openai' };
-  return { provider: 'openai', provider_hint: p };
-}
-
 function buildMemuPayloadForLocal(
   cfg: MemuPluginConfig,
   userId: string,
@@ -928,58 +866,7 @@ function buildMemuPayloadForLocal(
   opts?: { conversationId?: string }
 ): any {
 
-  // Unset steps inherit ST's default profile when API overrides are active.
-  // Server config owns the live embedding space until model changes can re-embed each Soul database.
-  const steps: MemuStep[] = ["preprocess", "memory_extract", "category_update", "reflection", "consolidation"];
-
-  function resolveOrSkip(id: string, step: string): NonNullable<ReturnType<typeof resolveProfileCredentials>> {
-    const cred = resolveProfileCredentials(id);
-    if (cred && cred.ok) return cred;
-    throw new Error(`memu: step '${step}' profile '${id}' could not be resolved`);
-  }
-
-  function buildProfile(cred: NonNullable<ReturnType<typeof resolveProfileCredentials>>): any {
-    const mapped = mapSTProviderToMemU(cred.provider);
-    return {
-      provider: mapped.provider,
-      base_url: cred.baseUrl,
-      api_key: cred.key,
-      chat_model: cred.model,
-      ...(mapped.provider_hint ? { provider_hint: mapped.provider_hint } : {}),
-    };
-  }
-
-  const llm_profiles: Record<string, any> = {};
-
-  const useApiProfiles = cfg.useServerSettings === false && !cfg.useClaudeCode;
-  if (useApiProfiles && cfg.defaultProfileId) {
-    const cred = resolveOrSkip(cfg.defaultProfileId, "default");
-    llm_profiles["default"] = buildProfile(cred);
-  }
-
-  for (const s of useApiProfiles ? steps : []) {
-    const id = cfg.stepProfileId?.[s];
-    if (!id) continue;
-    const cred = resolveOrSkip(id, s);
-    const profile = buildProfile(cred);
-    llm_profiles[s] = profile;
-  }
-
-  const memorize_config: any = {};
-  if (llm_profiles["preprocess"]) memorize_config.preprocess_llm_profile = "preprocess";
-  if (llm_profiles["memory_extract"]) memorize_config.memory_extract_llm_profile = "memory_extract";
-  if (llm_profiles["category_update"]) memorize_config.category_update_llm_profile = "category_update";
-
-  const retrieve_config: any = {};
-  if (llm_profiles["reflection"]) retrieve_config.sufficiency_check_llm_profile = "reflection";
-
-  const payload: any = {
-    user: { user_id: userId, soul_id: characterId },
-    ...(cfg.useServerSettings === false ? { claude_code: cfg.useClaudeCode } : {}),
-    ...(Object.keys(llm_profiles).length ? { llm_profiles } : {}),
-    ...(Object.keys(memorize_config).length ? { memorize_config } : {}),
-    ...(Object.keys(retrieve_config).length ? { retrieve_config } : {}),
-  };
+  const payload: any = { user: { user_id: userId, soul_id: characterId } };
 
   if (conversation) payload.conversation = conversation;
   if (typeof opts?.conversationId === 'string' && opts.conversationId.trim()) {
@@ -992,6 +879,166 @@ function buildMemuPayloadForLocal(
 // ---------------------------------
 // Local MCP/HTTP server (FastAPI)
 // ---------------------------------
+
+function nativeModelFields(): Record<string, string> {
+  const constants = fs.readFileSync(path.join(getStRoot(), 'src/constants.js'), 'utf8');
+  const sources = constants.match(/CHAT_COMPLETION_SOURCES\s*=\s*\{([^}]+)\}/s)?.[1] || '';
+  const names = Object.fromEntries([...sources.matchAll(/(\w+)\s*:\s*'([^']+)'/g)].map(match => [match[1], match[2]]));
+  const getter = fs.readFileSync(path.join(getStRoot(), 'public/scripts/openai.js'), 'utf8');
+  return Object.fromEntries([...getter.matchAll(/case chat_completion_sources\.(\w+):\s*return settings\.(\w+)/g)]
+    .filter(match => names[match[1]]).map(match => [names[match[1]], match[2]]));
+}
+
+function mappingContext(req: Request): { profiles: AnyObject[]; secrets: AnyObject; directory: string; oai: AnyObject } {
+  const directory = (req as any).user?.directories?.root;
+  if (typeof directory !== 'string' || !directory) throw Object.assign(new Error('Authenticated ST user required'), { status: 403 });
+  const settings = readJsonIfExists(path.join(directory, 'settings.json')) || {};
+  const secrets = readJsonIfExists(path.join(directory, 'secrets.json')) || {};
+  const profiles = (settings.extension_settings?.connectionManager?.profiles || []).map((profile: AnyObject) => ({ ...profile, __st_user_dir: directory }));
+  const oai = settings.oai_settings || {};
+  for (const [provider, field] of Object.entries(nativeModelFields())) {
+    const model = oai[field];
+    if (typeof model !== 'string' || !model) continue;
+    const providerSecrets = Object.fromEntries(Object.entries(secrets).filter(([key]) => key === `api_key_${provider}` || (provider === 'mistralai' && key === 'api_key_mistral')));
+    if (!pickKeyForProvider(provider, providerSecrets) && !(provider === 'custom' && oai.custom_url)
+      && !(['openai', 'mistralai', 'deepseek', 'xai'].includes(provider) && oai.reverse_proxy)) continue;
+    profiles.push({ id: `native:cc:${provider}`, name: provider, mode: 'cc', api: provider, model,
+      'api-url': provider === 'custom' ? oai.custom_url : _stProviderUrls[provider], __st_user_dir: directory });
+  }
+  const textgen = settings.textgenerationwebui_settings || {};
+  for (const [provider, baseUrl] of Object.entries(textgen.server_urls || {})) {
+    const model = textgen[`${provider}_model`];
+    if (baseUrl && model) profiles.push({ id: `native:tc:${provider}`, name: provider, mode: 'tc', api: provider, model, 'api-url': baseUrl, __st_user_dir: directory });
+  }
+  return { profiles, secrets, directory, oai };
+}
+
+function mappingCredentials(profile: AnyObject, context: ReturnType<typeof mappingContext>, selection: AnyObject, native = false) {
+  const normalized = normalizeProfile(profile);
+  const provider = normalized.provider;
+  const supported = (profile.mode === 'cc' && ['openai', 'openrouter', 'custom', 'groq', 'mistralai', 'deepseek', 'xai', 'perplexity', 'nanogpt'].includes(provider))
+    || (profile.mode === 'tc' && ['vllm', 'aphrodite', 'tabby', 'llamacpp', 'ollama', 'lmstudio'].includes(provider));
+  if (!supported) throw Object.assign(new Error(`Unsupported ST transport: ${profile.mode || 'unknown'}/${provider}`), { status: 400 });
+  if (selection.provider !== provider) throw Object.assign(new Error('Provider does not match the configured connection'), { status: 400 });
+  const buckets = Object.fromEntries(Object.entries(context.secrets).filter(([key]) => key === `api_key_${provider}`
+    || (provider === 'mistralai' && key === 'api_key_mistral') || (provider === 'togetherai' && key === 'api_key_together')));
+  const proxy = (native || String(profile.id).startsWith('native:cc:')) && ['openai', 'mistralai', 'deepseek', 'xai'].includes(provider)
+    ? context.oai.reverse_proxy : null;
+  const key = proxy ? String(context.oai.proxy_password || '')
+    : normalized.tokenInline || pickKeyForProvider(provider, normalized.secretId ? context.secrets : buckets, normalized.secretId);
+  let baseUrl = proxy || selection.base_url || resolveProfileBaseUrl(profile, normalized, context.profiles);
+  if (typeof baseUrl !== 'string' || !baseUrl) throw Object.assign(new Error('Configured connection lacks URL'), { status: 400 });
+  if (normalized.secretId && !key) throw Object.assign(new Error('Configured secret not found'), { status: 400 });
+  if (profile.mode === 'tc' && new URL(baseUrl).pathname === '/') baseUrl = baseUrl.replace(/\/$/, '') + '/v1';
+  return { ok: true, provider, baseUrl, key: key || '', model: String(selection.model || normalized.model || '') };
+}
+
+async function mappingCatalog(context: ReturnType<typeof mappingContext>, discover?: string): Promise<AnyObject[]> {
+  return Promise.all(context.profiles.map(async profile => {
+    const normalized = normalizeProfile(profile);
+    const entry: AnyObject = { profile_id: profile.id, provider: normalized.provider, label: profile.name || normalized.provider,
+      models: normalized.model ? [{ model: normalized.model }] : [], supported: false };
+    try {
+      const credentials = mappingCredentials(profile, context, { provider: normalized.provider });
+      const cacheKey = `${context.directory}|chat|${profile.id}`;
+      const cached = MODEL_CACHE.get(cacheKey);
+      const listed = cached && Date.now() - cached.ts < MODEL_CACHE_TTL_MS ? cached.value
+        : (discover === 'all' || discover === profile.id) ? await listModelsForProfileUncached(profile.id, 'chat', credentials) : null;
+      if (listed) MODEL_CACHE.set(cacheKey, { ts: Date.now(), value: listed });
+      if (listed?.ok) {
+        const windows = (listed as AnyObject).context_windows || {};
+        entry.models = sorted_unique([...listed.models, ...(normalized.model ? [normalized.model] : [])])
+          .map(model => ({ model, ...(windows[model] ? { context_window_tokens: windows[model] } : {}) }));
+      } else if (listed) entry.reason = listed.message;
+      if (!listed && normalized.model && Number.isInteger(profile.context_window_tokens) && profile.context_window_tokens > 0) {
+        entry.models[0].context_window_tokens = profile.context_window_tokens;
+      }
+      entry.supported = true;
+    } catch (error: any) { entry.reason = error.message; }
+    return entry;
+  }));
+}
+
+async function resolveMappingSelection(selection: AnyObject, context: ReturnType<typeof mappingContext>, native = false): Promise<AnyObject> {
+  if (!selection || typeof selection.provider !== 'string' || typeof selection.model !== 'string' || !selection.model.trim()) {
+    throw Object.assign(new Error('Provider and model are required'), { status: 400 });
+  }
+  let profile = context.profiles.find(p => p.id === selection.profile_id);
+  if (!profile && native && ['cc', 'tc'].some(mode => selection.profile_id === `native:${mode}:${selection.provider}`)) {
+    profile = { id: selection.profile_id, mode: selection.profile_id.split(':')[1], api: selection.provider,
+      model: selection.model, 'api-url': selection.base_url || _stProviderUrls[selection.provider], __st_user_dir: context.directory };
+  }
+  if (!profile) throw Object.assign(new Error('Configured ST connection not found'), { status: 400 });
+  const credentials = mappingCredentials(native ? { ...profile, 'secret-id': undefined, secretId: undefined, api_key: undefined } : profile, context, selection, native);
+  const catalog = (await mappingCatalog(context)).find(p => p.profile_id === profile.id);
+  const capacity = catalog?.models.find((model: AnyObject) => model.model === selection.model)?.context_window_tokens
+    ?? (native && Number.isInteger(selection.context_window_tokens) && selection.context_window_tokens > 0 ? selection.context_window_tokens : undefined);
+  return { provider: 'openai', base_url: credentials.baseUrl, api_key: credentials.key, chat_model: selection.model,
+    ...(capacity ? { context_window_tokens: capacity } : {}),
+    ...(native && Number.isInteger(selection.max_tokens) && selection.max_tokens > 0 ? { max_tokens: selection.max_tokens } : {}) };
+}
+
+function modelMappingProjection(config: AnyObject, providers: AnyObject[]) {
+  const llm = config.llm || {};
+  const selectors = (rows: AnyObject = {}) => Object.fromEntries(Object.entries(rows).map(([role, row]: [string, any]) =>
+    [role, { source: row.source, ...(row.selection ? { selection: row.selection } : {}) }]));
+  return { claude_code: config.claude_code === true, reply_models: selectors(llm.reply_models), step_models: selectors(llm.step_models),
+    st_selected: llm.st_selected?.selection ? { selection: llm.st_selected.selection } : null,
+    base_model: { provider: llm.provider, model: llm.chat_model }, providers };
+}
+
+function mappingSelection(selection: AnyObject): AnyObject {
+  if (!selection || typeof selection !== 'object') throw Object.assign(new Error('Model selection required'), { status: 400 });
+  return Object.fromEntries(['profile_id', 'provider', 'model', 'base_url', 'context_window_tokens', 'max_tokens']
+    .filter(key => selection[key] !== undefined).map(key => [key, selection[key]]));
+}
+
+export async function proxyModelMappings(req: Request, res: Response): Promise<void> {
+  try {
+    const context = mappingContext(req);
+    const srv = await ensureLocalServer(readPluginConfig());
+    if (req.method === 'GET') {
+      if (!req.query?.models) await httpJson(srv.baseUrl, '/reload', 'POST', {});
+    } else {
+      const body = req.body || {};
+      const patch: AnyObject = {};
+      const llm: AnyObject = {};
+      if (body.claude_code !== undefined) {
+        if (typeof body.claude_code !== 'boolean') throw Object.assign(new Error('claude_code must be boolean'), { status: 400 });
+        patch.claude_code = body.claude_code;
+      }
+      for (const [group, roles] of Object.entries({ reply_models: ['srmm', 'other_apps'], step_models: ['preprocess', 'memory_extract', 'category_update', 'reflection', 'consolidation'] })) {
+        if (body[group] === undefined) continue;
+        llm[group] = {};
+        for (const [role, row] of Object.entries(body[group]) as [string, AnyObject][]) {
+          if (!roles.includes(role) || !row || !['config', 'st_native', 'configured', ...(group === 'step_models' ? ['srmm'] : [])].includes(row.source)) {
+            throw Object.assign(new Error('Invalid model mapping selector'), { status: 400 });
+          }
+          llm[group][role] = { source: row.source };
+          if (row.source === 'configured') {
+            llm[group][role].selection = mappingSelection(row.selection);
+            llm[group][role].resolved = await resolveMappingSelection(llm[group][role].selection, context);
+          }
+        }
+      }
+      if (body.st_selected !== undefined) {
+        const selection = mappingSelection(body.st_selected?.selection);
+        llm.st_selected = { selection, resolved: await resolveMappingSelection(selection, context, true) };
+      }
+      if (Object.keys(llm).length) patch.llm = llm;
+      await httpJson(srv.baseUrl, '/config', 'POST', patch);
+    }
+    const result = await httpJson(srv.baseUrl, '/config', 'GET');
+    res.json(modelMappingProjection(result.config, await mappingCatalog(context, typeof req.query?.models === 'string' ? req.query.models : undefined)));
+  } catch (error: any) {
+    res.status(Number.isInteger(error.status) ? error.status : 503).json({ error: error.detail || error.message || String(error) });
+  }
+}
+
+export function registerModelMappings(router: Router): void {
+  router.get('/modelMappings', proxyModelMappings);
+  router.post('/modelMappings', proxyModelMappings);
+}
 
 let _externalSpawnCooldownUntilUnixMs: number = 0;
 
@@ -1463,14 +1510,6 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
   pruneLocalTasks();
   try {
     const cfg = readPluginConfig();
-    const settings = req.body?.runtimeSettings;
-    const runtimeCfg = settings ? sanitizeIncomingConfig({
-      ...cfg,
-      useServerSettings: settings.useServerSettings,
-      useClaudeCode: settings.useClaudeCode,
-      defaultProfileId: settings.defaultProfileId,
-      stepProfileId: settings.stepProfileId,
-    }) : cfg;
     const namedConversation = conversation.map((msg: any) => {
       if (!msg || typeof msg !== "object") return msg;
       if (Object.prototype.hasOwnProperty.call(msg, "name")) return msg;
@@ -1478,9 +1517,8 @@ export async function proxyMemorizeConversation(req: Request, res: Response): Pr
       if ((msg.role === "assistant" || msg.role === "soul") && soulName) return { ...msg, name: soulName };
       return msg;
     });
-    const payload = buildMemuPayloadForLocal(runtimeCfg, userId, characterId, namedConversation, {
-      conversationId,
-    });
+    const payload = { user: { user_id: userId, soul_id: characterId },
+      conversation: namedConversation, conversation_id: conversationId } as any;
     payload.source_message_count = req.body?.source_message_count;
     payload.intent = req.body?.intent;
     payload.chat_name = req.body?.chat_name;
@@ -2065,17 +2103,7 @@ export async function proxyNarrativeSuggestion(req: Request, res: Response): Pro
   }
   try {
     const cfg = readPluginConfig();
-    const settings = req.body?.runtimeSettings;
-    const runtimeCfg = sanitizeIncomingConfig({
-      ...cfg,
-      ...(settings ? {
-        useServerSettings: settings.useServerSettings,
-        useClaudeCode: settings.useClaudeCode,
-        defaultProfileId: settings.defaultProfileId,
-      } : {}),
-      stepProfileId: {},
-    });
-    const payload = buildMemuPayloadForLocal(runtimeCfg, userId, soulId);
+    const payload = buildMemuPayloadForLocal(cfg, userId, soulId);
     const srv = await ensureLocalServer(cfg);
     const resp = await httpJson(
       srv.baseUrl,

@@ -12,6 +12,7 @@ import {
   registerConversationTurn,
   registerConversationTurnUndo,
   registerDeleteConversationSource,
+  registerModelMappings,
   registerRetrieveDefaultCategories,
   registerScopeStorageProbe,
   registerLocalHealth,
@@ -114,6 +115,7 @@ export async function init(router: Router): Promise<void> {
   registerConversationTurn(router);
   registerConversationTurnUndo(router);
   registerDeleteConversationSource(router);
+  registerModelMappings(router);
   registerScopeStorageProbe(router);
   registerMemorizeConversation(router);
   registerNarrativeSuggestion(router);

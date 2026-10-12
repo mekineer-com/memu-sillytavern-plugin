@@ -36,11 +36,8 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
     assert.equal(body.error.message, detail.message);
   }
   console.log('Paused retrieve/turn/memorize/suggestion proxies preserve scoped refusal.');
-  let wire, response, cfgAtBuild, releaseServer;
-  context.buildMemuPayloadForLocal = (cfg, userId, soulId, conversation, opts) => {
-    cfgAtBuild = cfg;
-    return { user: { user_id: userId, soul_id: soulId }, conversation, conversation_id: opts.conversationId };
-  };
+  let wire, response, releaseServer;
+  context.buildMemuPayloadForLocal = () => assert.fail('Memory publication must not resolve reply profiles');
   context.fetch = async (_url, options) => {
     wire = JSON.parse(options.body || '{}');
     return { ok: true, status: 200, text: async () => JSON.stringify(response) };
@@ -71,13 +68,14 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
     assert.equal(wire.source_message_count, 6); assert.equal(wire.intent, 'manual');
     assert.equal(wire.chat_name, 'TestSoul'); assert.equal(wire.conversation_id, 'integrity:test-main');
     assert.deepEqual(wire.conversation.map(row => row.source_conversation_index), [0, 3, 4, 5]);
-    assert.equal(cfgAtBuild.useClaudeCode, true); assert.equal(cfgAtBuild.defaultProfileId, 'captured-api');
+    assert.deepEqual(wire.user, { user_id: 'TestOwner', soul_id: 'TestSoul' });
+    for (const field of ['llm_profiles', 'claude_code', 'memorize_config', 'retrieve_config', 'runtimeSettings']) assert.equal(field in wire, false);
   }
   context.ensureLocalServer = () => new Promise(resolve => { releaseServer = resolve; });
   response = { status: 'deferred' };
   const delayed = context.exports.proxyMemorizeConversation(req, res);
-  assert.equal(cfgAtBuild.defaultProfileId, 'captured-api'); // builder ran before server wait
   releaseServer({ baseUrl: 'http://test.invalid' }); await delayed;
+  assert.equal('llm_profiles' in wire, false);
   context.ensureLocalServer = async () => ({ baseUrl: 'http://test.invalid' });
   for (const status of [undefined, 'success']) {
     const before = context.localTasks.size;
@@ -95,7 +93,7 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
     await context.exports.proxyGetTaskStatus({ body: { taskId: 'task-0' } }, res);
     assert.equal(body.status, last_result === 'success' ? 'SUCCESS' : 'FAILURE');
   }
-  console.log('Saved metadata/names, captured runtime choices, truthful admissions and accepted/terminal polling pass.');
+  console.log('Saved metadata/names, server-owned memory runtime, truthful admissions and accepted/terminal polling pass.');
   context.buildMemuPayloadForLocal = () => assert.fail('Undo must not resolve API profiles');
   response = { status: 'restored' };
   await context.exports.proxyConversationTurnUndo({ body: {
