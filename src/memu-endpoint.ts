@@ -1750,6 +1750,30 @@ export async function proxyConversationTurnUndo(req: Request, res: Response): Pr
   }
 }
 
+export async function proxyDeleteConversationSource(req: Request, res: Response): Promise<void> {
+  const { userId, soulId, conversationId } = req.body || {};
+  if (![userId, soulId, conversationId].every(id => typeof id === 'string' && id.trim())) {
+    res.status(400).json({ error: 'Missing userId/soulId/conversationId' });
+    return;
+  }
+  try {
+    const baseUrl = getExternalServerBaseUrl(readPluginConfig());
+    if (!(await _externalServerHealthInfo(baseUrl)).healthy) {
+      res.status(503).json({ error: 'memU is offline; cannot retire the conversation source.' });
+      return;
+    }
+    const result = await httpJson(
+      baseUrl,
+      `/conversation/${encodeURIComponent(conversationId)}/source`,
+      'DELETE',
+      { user: { user_id: userId, soul_id: soulId } },
+    );
+    res.json(result);
+  } catch (e: any) {
+    res.status(Number.isInteger(e?.status) ? e.status : 503).json({ error: e?.detail || e?.message || String(e) });
+  }
+}
+
 export async function proxyScopeStorageProbe(req: Request, res: Response): Promise<void> {
   const userId = String(req.body?.userId || "");
   const soulId = String(req.body?.soulId || "");
@@ -2003,6 +2027,10 @@ export function registerConversationTurn(router: Router): void {
 
 export function registerConversationTurnUndo(router: Router): void {
   router.post("/conversationTurnUndo", proxyConversationTurnUndo);
+}
+
+export function registerDeleteConversationSource(router: Router): void {
+  router.post('/deleteConversationSource', proxyDeleteConversationSource);
 }
 
 

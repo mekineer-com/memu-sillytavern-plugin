@@ -6,12 +6,17 @@ const ts = require('typescript');
 // Exercise the existing proxies and HTTP decoder without starting ST or reading config.
 const source = fs.readFileSync(`${__dirname}/../src/memu-endpoint.ts`, 'utf8');
 const code = source.slice(source.indexOf('async function httpJson('), source.indexOf('// ---------------------------------', source.indexOf('async function httpJson(')))
+  + source.slice(source.indexOf('function getExternalServerBaseUrl('), source.indexOf('function getExternalServerRunPy('))
+  + source.slice(source.indexOf('async function _externalServerHealthInfo('), source.indexOf('export async function externalServerStatus('))
+  + source.slice(source.indexOf('export function registerDeleteConversationSource('), source.indexOf('export function registerScopeStorageProbe('))
   + source.slice(source.indexOf('export async function proxyConversationRetrieve('), source.indexOf('export async function proxyScopeStorageProbe('))
   + source.slice(source.indexOf('export async function proxyMemorizeConversation('), source.indexOf('export async function proxyRetrieveDefaultCategories('))
   + source.slice(source.indexOf('export async function proxyNarrativeSuggestion('), source.indexOf('export function registerNarrativeSuggestion('));
 const detail = { code: 'soul_paused', message: 'Test Soul is paused. Retry in OpenAlma launcher.' };
 const context = {
   exports: {}, URLSearchParams,
+  process: { env: { MEMU_SERVER_URL: 'http://test.invalid/' } },
+  _externalServerInstanceId: null, _externalServerEphemeralDb: null,
   fetch: async () => ({ ok: false, status: 409, text: async () => JSON.stringify({ detail }) }),
   readPluginConfig: () => ({}), ensureLocalServer: async () => ({ baseUrl: 'http://test.invalid' }),
   buildMemuPayloadForLocal: () => ({}),
@@ -104,4 +109,79 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
   } }, res);
   assert.equal(httpStatus, 400);
   console.log('Undo forwards the exact reply ID without API-profile resolution; unqualified requests refuse.');
+
+  const transportCalls = [];
+  let configReads = 0, healthMode = 'ok', deleteStatus = 200, deleteResponse = { status: 'deleted' };
+  const secretConfig = { autoStartServer: true, apiKey: 'fictional-secret', defaultProfileId: 'broken-profile' };
+  context.readPluginConfig = () => { configReads++; return secretConfig; };
+  context.ensureLocalServer = () => assert.fail('Source retirement must not auto-start memU');
+  context.sanitizeIncomingConfig = () => assert.fail('Source retirement must not resolve runtime profiles');
+  context.fetch = async (url, options) => {
+    transportCalls.push({ url, options });
+    if (url.endsWith('/health')) {
+      assert.equal(options, undefined);
+      if (healthMode === 'throw') throw Error('fictional offline server');
+      return { ok: healthMode === 'ok', status: healthMode === 'ok' ? 200 : 503,
+        text: async () => JSON.stringify({ serverInstanceId: 'fake-instance', ephemeralDb: false }) };
+    }
+    if (deleteStatus === 'throw') throw Error('fictional retirement connection failure');
+    return { ok: deleteStatus === 200, status: deleteStatus, text: async () => JSON.stringify(deleteResponse) };
+  };
+  const deletion = { userId: 'TestOwner', soulId: 'TestSoul', conversationId: 'integrity:chat /?#%\u96ea',
+    runtimeSettings: secretConfig, apiKey: 'must-not-forward', conversation: messages };
+  for (const field of ['userId', 'soulId', 'conversationId']) {
+    for (const invalid of [undefined, '', '  ', 7, true, [], {}]) {
+      const before = [configReads, transportCalls.length];
+      await context.exports.proxyDeleteConversationSource({ body: { ...deletion, [field]: invalid } }, res);
+      assert.equal(httpStatus, 400);
+      assert.deepEqual([configReads, transportCalls.length], before);
+    }
+  }
+  for (const scope of [{ userId: 'TestOwner', soulId: 'TestSoul' }, { userId: 'OtherOwner', soulId: 'OtherSoul' }]) {
+    httpStatus = undefined;
+    const before = transportCalls.length;
+    await context.exports.proxyDeleteConversationSource({ body: { ...deletion, ...scope } }, res);
+    assert.equal(httpStatus, undefined); // Express defaults successful JSON to HTTP 200
+    assert.equal(body.status, 'deleted');
+    const [health, retired] = transportCalls.slice(before);
+    assert.equal(transportCalls.length, before + 2);
+    assert.equal(health.url, 'http://test.invalid/health');
+    assert.equal(retired.url, `http://test.invalid/conversation/${encodeURIComponent(deletion.conversationId)}/source`);
+    assert.equal(retired.options.method, 'DELETE');
+    assert.deepEqual(JSON.parse(JSON.stringify(retired.options.headers)), { 'content-type': 'application/json' });
+    assert.deepEqual(JSON.parse(retired.options.body), { user: { user_id: scope.userId, soul_id: scope.soulId } });
+  }
+  for (const mode of ['refuse', 'throw']) {
+    healthMode = mode;
+    const before = transportCalls.length;
+    await context.exports.proxyDeleteConversationSource({ body: deletion }, res);
+    assert.equal(httpStatus, 503); assert.match(body.error, /offline/);
+    assert.equal(transportCalls.length, before + 1);
+    assert.equal(transportCalls.at(-1).url, 'http://test.invalid/health');
+  }
+  healthMode = 'ok';
+  for (const [status, refusal] of [[409, detail], [404, 'Conversation source missing'], [422, { code: 'invalid_scope', message: 'Fictional scope refusal' }]]) {
+    deleteStatus = status; deleteResponse = { detail: refusal };
+    await context.exports.proxyDeleteConversationSource({ body: deletion }, res);
+    assert.equal(httpStatus, status);
+    assert.deepEqual(JSON.parse(JSON.stringify(body.error)), refusal);
+  }
+  deleteStatus = 'throw';
+  await context.exports.proxyDeleteConversationSource({ body: deletion }, res);
+  assert.equal(httpStatus, 503); assert.match(body.error, /retirement connection failure/);
+
+  const indexSource = fs.readFileSync(`${__dirname}/../src/index.ts`, 'utf8');
+  assert(indexSource.includes('  registerDeleteConversationSource,'));
+  const initCode = indexSource.slice(indexSource.indexOf('export async function init('), indexSource.indexOf('export async function exit('));
+  const registered = [];
+  const initContext = { exports: {}, express: { json: () => 'fake-json-middleware' },
+    chalk: { green: value => value }, MODULE_NAME: 'memu', console: { log() {} } };
+  for (const [, name] of initCode.matchAll(/\b(register\w+)\(router\);/g)) initContext[name] = () => {};
+  initContext.registerDeleteConversationSource = context.exports.registerDeleteConversationSource;
+  vm.runInNewContext(ts.transpileModule(initCode, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, initContext);
+  await initContext.exports.init({ use() {}, post: (route, handler) => registered.push({ route, handler }) });
+  assert.equal(registered.length, 1);
+  assert.equal(registered[0].route, '/deleteConversationSource');
+  assert.equal(registered[0].handler, context.exports.proxyDeleteConversationSource);
+  console.log('Scoped source retirement, encoded CID, offline refusal, exact HTTP errors and init registration pass without auto-start or profiles.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
