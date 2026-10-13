@@ -4,6 +4,11 @@ Memorize uses the saved main chat. The server decides automatic eligibility afte
 a reply is saved; merely opening a chat does not start paid processing. Waiting,
 deferred, publication-only and coalesced requests do not create local tasks.
 
+Progress comes from MCP by owner and Soul, not an expiring plugin task list.
+The returned task ID is only a client observation token. Polling errors are
+unknown status, not failed Memorize; skipped and cancelled work are not success.
+Control requests are bounded without automatically repeating writes.
+
 For any issues or suggestions, please contact mekineer@gmail.com.
 
 REQUIRES:<br>

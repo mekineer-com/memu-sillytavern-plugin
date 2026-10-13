@@ -24887,9 +24887,10 @@ async function waitForServerHealthy(baseUrl) {
     const f = globalThis.fetch;
     if (!f)
         return; // will fail later with a clearer error
-    for (let i = 0; i < 50; i++) {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
         try {
-            const r = await f(baseUrl + '/health');
+            const r = await f(baseUrl + '/health', { signal: AbortSignal.timeout(1000) });
             if (r && r.ok)
                 return;
         }
@@ -24904,7 +24905,7 @@ async function isServerHealthy(baseUrl) {
         const f = globalThis.fetch;
         if (!f)
             return false;
-        const r = await f(baseUrl + '/health');
+        const r = await f(baseUrl + '/health', { signal: AbortSignal.timeout(5000) });
         return !!(r && r.ok);
     }
     catch {
@@ -24956,7 +24957,7 @@ async function _externalServerHealthInfo(baseUrl) {
         const f = globalThis.fetch;
         if (!f)
             return { healthy: false };
-        const r = await f(baseUrl + '/health');
+        const r = await f(baseUrl + '/health', { signal: AbortSignal.timeout(5000) });
         if (!r || !r.ok)
             return { healthy: false };
         const txt = await r.text();
@@ -25103,12 +25104,12 @@ function registerServerControl(router) {
         return res.json(await externalServerStop());
     });
 }
-async function httpJson(baseUrl, urlPath, method, body) {
+async function httpJson(baseUrl, urlPath, method, body, timeoutMs = 600000) {
     const f = globalThis.fetch;
     if (!f)
         throw new Error('This SillyTavern Node runtime does not support fetch(). Upgrade Node to 18+.');
     const fullUrl = baseUrl + urlPath;
-    const opts = { method, headers: { 'content-type': 'application/json' } };
+    const opts = { method, headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(timeoutMs) };
     if (body !== undefined)
         opts.body = JSON.stringify(body);
     const r = await f(fullUrl, opts);
@@ -25126,28 +25127,8 @@ async function httpJson(baseUrl, urlPath, method, body) {
     return parsed;
 }
 // ---------------------------------
-// Local task routing cache
+// Client-local observation token, not a server task identifier.
 // ---------------------------------
-const localTasks = new Map();
-const LOCAL_TASK_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
-const LOCAL_TASK_MAX = 200;
-function pruneLocalTasks(now = Date.now()) {
-    // Drop old tasks first (keeps memory bounded even if something never polls).
-    const cutoff = now - LOCAL_TASK_TTL_MS;
-    for (const [id, t] of localTasks) {
-        if (t.createdAt < cutoff)
-            localTasks.delete(id);
-    }
-    // If still too many, drop oldest by createdAt (Map preserves insertion order,
-    // but we want true oldest when tasks might be updated).
-    if (localTasks.size <= LOCAL_TASK_MAX)
-        return;
-    const items = Array.from(localTasks.entries());
-    items.sort((a, b) => (a[1].createdAt - b[1].createdAt));
-    for (let i = 0; i < items.length && localTasks.size > LOCAL_TASK_MAX; i++) {
-        localTasks.delete(items[i][0]);
-    }
-}
 function makeTaskId() {
     return crypto_1.default.randomUUID ? crypto_1.default.randomUUID() : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
@@ -25168,7 +25149,6 @@ async function proxyMemorizeConversation(req, res) {
         res.status(400).json({ error: "Missing userId/soulId/conversation" });
         return;
     }
-    pruneLocalTasks();
     try {
         const cfg = readPluginConfig();
         const namedConversation = conversation.map((msg) => {
@@ -25206,13 +25186,7 @@ async function proxyMemorizeConversation(req, res) {
         if (status !== "accepted" && status !== "started") {
             throw new Error(`Unexpected Memorize admission status: ${String(status)}`);
         }
-        const taskId = makeTaskId();
-        localTasks.set(taskId, {
-            createdAt: Date.now(),
-            userId,
-            soulId: characterId,
-        });
-        res.json({ status, taskId });
+        res.json({ status, taskId: makeTaskId() });
     }
     catch (e) {
         const err = String(e?.message || e || "").trim() || "Memorize start failed";
@@ -25221,16 +25195,16 @@ async function proxyMemorizeConversation(req, res) {
     }
 }
 async function proxyGetTaskStatus(req, res) {
-    const taskId = String(req.body?.taskId || "");
-    const task = localTasks.get(taskId);
-    if (!task) {
-        res.json({ status: "FAILURE", error: "Unknown taskId" });
+    const userId = typeof req.body?.userId === 'string' ? req.body.userId.trim() : '';
+    const soulId = typeof req.body?.soulId === 'string' ? req.body.soulId.trim() : '';
+    if (!userId || !soulId) {
+        res.status(400).json({ error: "Missing userId/soulId" });
         return;
     }
     try {
         const cfg = readPluginConfig();
         const srv = await ensureLocalServer(cfg);
-        const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(task.userId)}&soul_id=${encodeURIComponent(task.soulId)}`, 'GET');
+        const p = await httpJson(srv.baseUrl, `/memorize/progress?user_id=${encodeURIComponent(userId)}&soul_id=${encodeURIComponent(soulId)}`, 'GET', undefined, 30000);
         if (p?.active === true) {
             const phase = typeof p?.phase === "string" && p.phase.trim() ? p.phase.trim() : undefined;
             const current = Number(p?.current);
@@ -25241,19 +25215,15 @@ async function proxyGetTaskStatus(req, res) {
             res.json({ status: phase === "accepted" ? "PENDING" : "PROCESSING", ...(progress ? { progress } : {}) });
             return;
         }
+        const statuses = { success: 'SUCCESS', failure: 'FAILURE',
+            cancelled: 'CANCELLED', skipped: 'SKIPPED', deferred: 'SKIPPED', nothing_to_memorize: 'SKIPPED' };
         const lastResult = String(p?.last_result || "").trim().toLowerCase();
-        if (!lastResult) {
-            res.json({ status: "FAILURE", error: "memorize progress missing terminal result" });
-            return;
-        }
-        const failed = lastResult === "failure" || lastResult === "cancelled";
-        res.json({
-            status: failed ? "FAILURE" : "SUCCESS",
-            ...(p?.error ? { error: String(p.error) } : {}),
-        });
+        const status = p?.active === false ? (lastResult ? statuses[lastResult] : 'IDLE') : undefined;
+        res.json({ status: typeof status === 'string' ? status : 'UNKNOWN',
+            ...(p?.error ? { error: String(p.error).slice(0, 500) } : {}) });
     }
     catch (e) {
-        res.json({ status: "FAILURE", error: String(e?.message || e || "Task status polling failed") });
+        res.json({ status: "UNKNOWN", error: String(e?.message || e || "Task status polling failed").slice(0, 500) });
     }
 }
 async function proxyRetrieveDefaultCategories(req, res) {
@@ -25659,11 +25629,11 @@ async function proxyCancelMemorize(req, res) {
     try {
         const cfg = readPluginConfig();
         const srv = await ensureLocalServer(cfg);
-        const result = await httpJson(srv.baseUrl, '/memorize/cancel', 'POST', { user_id: userId, soul_id: soulId });
+        const result = await httpJson(srv.baseUrl, '/memorize/cancel', 'POST', { user_id: userId, soul_id: soulId }, 30000);
         res.json(result ?? { ok: false });
     }
     catch (e) {
-        res.json({ ok: false, error: e?.message || String(e) });
+        res.status(502).json({ error: e?.message || String(e) });
     }
 }
 function registerCancelMemorize(router) {

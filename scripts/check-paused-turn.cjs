@@ -11,18 +11,18 @@ const code = source.slice(source.indexOf('async function httpJson('), source.ind
   + source.slice(source.indexOf('export function registerDeleteConversationSource('), source.indexOf('export function registerScopeStorageProbe('))
   + source.slice(source.indexOf('export async function proxyConversationRetrieve('), source.indexOf('export async function proxyScopeStorageProbe('))
   + source.slice(source.indexOf('export async function proxyMemorizeConversation('), source.indexOf('export async function proxyRetrieveDefaultCategories('))
+  + source.slice(source.indexOf('export async function proxyCancelMemorize('), source.indexOf('export function registerCancelMemorize('))
   + source.slice(source.indexOf('export async function proxyNarrativeSuggestion('), source.indexOf('export function registerNarrativeSuggestion('));
 const detail = { code: 'soul_paused', message: 'Test Soul is paused. Retry in OpenAlma launcher.' };
 const context = {
-  exports: {}, URLSearchParams,
+  exports: {}, URLSearchParams, AbortSignal,
   process: { env: { MEMU_SERVER_URL: 'http://test.invalid/' } },
   _externalServerInstanceId: null, _externalServerEphemeralDb: null,
   fetch: async () => ({ ok: false, status: 409, text: async () => JSON.stringify({ detail }) }),
   readPluginConfig: () => ({}), ensureLocalServer: async () => ({ baseUrl: 'http://test.invalid' }),
   buildMemuPayloadForLocal: () => ({}),
-  pruneLocalTasks: () => {},
   sanitizeIncomingConfig: value => value,
-  localTasks: new Map(), makeTaskId: () => `task-${context.localTasks.size}`,
+  makeTaskId: () => 'fictional-observation',
 };
 vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
 (async () => {
@@ -55,12 +55,10 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
   const res = { json: value => { body = value; }, status: value => { httpStatus = value; return res; } };
   for (const status of ['accepted', 'started', 'waiting_for_import', 'deferred', 'nothing_to_memorize', 'published', 'coalesced']) {
     response = { status };
-    const before = context.localTasks.size;
     await context.exports.proxyMemorizeConversation(req, res);
     assert.equal(body.status, status);
     const task = status === 'accepted' || status === 'started';
     assert.equal(Boolean(body.taskId), task);
-    assert.equal(context.localTasks.size, before + Number(task));
     assert.equal(wire.conversation[0].name, 'OtherPersona');
     assert.equal(wire.conversation[1].name, '');
     assert.equal(wire.conversation[2].name, 'TestOwner');
@@ -78,21 +76,51 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
   assert.equal('llm_profiles' in wire, false);
   context.ensureLocalServer = async () => ({ baseUrl: 'http://test.invalid' });
   for (const status of [undefined, 'success']) {
-    const before = context.localTasks.size;
     response = { status }; await context.exports.proxyMemorizeConversation(req, res);
-    assert.equal(httpStatus, 502); assert.equal(context.localTasks.size, before);
+    assert.equal(httpStatus, 502);
   }
   for (const phase of ['accepted', 'extracting', 'consolidation']) {
     response = { active: true, phase, current: 0, total: 2 };
-    await context.exports.proxyGetTaskStatus({ body: { taskId: 'task-0' } }, res);
+    await context.exports.proxyGetTaskStatus({ body: { userId: 'TestOwner', soulId: 'TestSoul' } }, res);
     assert.equal(body.status, phase === 'accepted' ? 'PENDING' : 'PROCESSING');
     assert.equal(body.progress.phase, phase);
   }
-  for (const last_result of ['success', 'failure', 'cancelled']) {
+  for (const [last_result, expected] of [['success', 'SUCCESS'], ['failure', 'FAILURE'],
+    ['cancelled', 'CANCELLED'], ['skipped', 'SKIPPED'], ['deferred', 'SKIPPED'],
+    ['nothing_to_memorize', 'SKIPPED'], ['unexpected', 'UNKNOWN'], [undefined, 'IDLE']]) {
     response = { active: false, last_result };
-    await context.exports.proxyGetTaskStatus({ body: { taskId: 'task-0' } }, res);
-    assert.equal(body.status, last_result === 'success' ? 'SUCCESS' : 'FAILURE');
+    await context.exports.proxyGetTaskStatus({ body: { userId: 'TestOwner', soulId: 'TestSoul', taskId: 'forgotten' } }, res);
+    assert.equal(body.status, expected);
   }
+  const fetchSaved = context.fetch;
+  for (const field of ['userId', 'soulId']) for (const value of [undefined, '', ' ', 7, {}]) {
+    await context.exports.proxyGetTaskStatus({ body: { userId: 'TestOwner', soulId: 'TestSoul', [field]: value } }, res);
+    assert.equal(httpStatus, 400);
+  }
+  context.fetch = async () => { throw new Error('Temporary outage'); };
+  await context.exports.proxyGetTaskStatus({ body: { userId: 'TestOwner', soulId: 'TestSoul' } }, res);
+  assert.equal(body.status, 'UNKNOWN');
+  httpStatus = undefined;
+  await context.exports.proxyCancelMemorize({ body: { userId: 'TestOwner', soulId: 'TestSoul' } }, res);
+  assert.equal(httpStatus, 502);
+  context.fetch = fetchSaved;
+  for (const active of [undefined, null, 'true']) {
+    response = { active };
+    await context.exports.proxyGetTaskStatus({ body: { userId: 'TestOwner', soulId: 'TestSoul' } }, res);
+    assert.equal(body.status, 'UNKNOWN');
+  }
+  response = { active: false, last_result: 'constructor' };
+  await context.exports.proxyGetTaskStatus({ body: { userId: 'TestOwner', soulId: 'TestSoul' } }, res);
+  assert.equal(body.status, 'UNKNOWN');
+  const keepAlive = setTimeout(() => assert.fail('Body deadline did not fire'), 1000);
+  try {
+    context.fetch = async (_url, options) => ({ ok: true, text: () => new Promise((_resolve, reject) => {
+      assert(options.signal);
+      if (options.signal.aborted) reject(options.signal.reason);
+      else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+    }) });
+    await assert.rejects(context.httpJson('http://test.invalid', '/memorize/progress', 'GET', undefined, 1), error => error.name === 'TimeoutError');
+  } finally { clearTimeout(keepAlive); context.fetch = fetchSaved; }
   console.log('Saved metadata/names, server-owned memory runtime, truthful admissions and accepted/terminal polling pass.');
   context.buildMemuPayloadForLocal = () => assert.fail('Undo must not resolve API profiles');
   response = { status: 'restored' };
@@ -117,7 +145,7 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
   context.fetch = async (url, options) => {
     transportCalls.push({ url, options });
     if (url.endsWith('/health')) {
-      assert.equal(options, undefined);
+      assert(options.signal instanceof AbortSignal);
       if (healthMode === 'throw') throw Error('fictional offline server');
       return { ok: healthMode === 'ok', status: healthMode === 'ok' ? 200 : 503,
         text: async () => JSON.stringify({ serverInstanceId: 'fake-instance', ephemeralDb: false }) };
