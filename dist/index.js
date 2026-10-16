@@ -23694,9 +23694,11 @@ async function init(router) {
     (0, memu_endpoint_1.registerSouls)(router);
     registerMetaEndpoints(router);
     (0, memu_endpoint_1.registerServerControl)(router);
+    await (0, memu_endpoint_1.startServerWithSillyTavern)();
     console.log(chalk_1.default.green(consts_1.MODULE_NAME), 'Plugin initialized');
 }
 async function exit() {
+    await (0, memu_endpoint_1.stopServerWithSillyTavern)();
     console.log(chalk_1.default.yellow(consts_1.MODULE_NAME), 'Plugin exited');
 }
 exports.info = {
@@ -23736,6 +23738,8 @@ exports.externalServerStatus = externalServerStatus;
 exports.externalServerPingInfo = externalServerPingInfo;
 exports.externalServerStart = externalServerStart;
 exports.externalServerStop = externalServerStop;
+exports.startServerWithSillyTavern = startServerWithSillyTavern;
+exports.stopServerWithSillyTavern = stopServerWithSillyTavern;
 exports.registerServerControl = registerServerControl;
 exports.proxyMemorizeConversation = proxyMemorizeConversation;
 exports.proxyGetTaskStatus = proxyGetTaskStatus;
@@ -23821,12 +23825,12 @@ function warnOnce(key, msg, ttlMs = 30000) {
 }
 const CONFIG_FILENAME = "memu-plugin.config.json";
 const DEFAULT_CONFIG = {
+    autoStartServer: false,
     version: 4,
     // External memU server folder (mcp-memu-server). In local mode we derive:
     //   baseUrl: http://127.0.0.1:8099  (or env MEMU_SERVER_URL)
     //   command: <serverPath>/run.py (spawned via python, no shell)
     serverPath: String(process.env.MEMU_SERVER_PATH || '').trim() || undefined,
-    autoStartServer: true,
     embeddingBatchSize: 25,
     updatedAt: new Date().toISOString(),
 };
@@ -23912,7 +23916,7 @@ function sanitizeIncomingConfig(obj) {
     // External server settings (local mode): only serverPath is user-configurable.
     const serverPathRaw = String(cfg.serverPath || '').trim();
     cfg.serverPath = serverPathRaw || DEFAULT_CONFIG.serverPath;
-    cfg.autoStartServer = (cfg.autoStartServer !== false);
+    cfg.autoStartServer = cfg.autoStartServer === true;
     cfg.updatedAt = new Date().toISOString();
     return cfg;
 }
@@ -24611,27 +24615,14 @@ function mappingCredentials(profile, context, selection, native = false) {
         baseUrl = baseUrl.replace(/\/$/, '') + '/v1';
     return { ok: true, provider, baseUrl, key: key || '', model: String(selection.model || normalized.model || '') };
 }
-async function mappingCatalog(context, discover) {
-    return Promise.all(context.profiles.map(async (profile) => {
+function mappingCatalog(context) {
+    return context.profiles.map(profile => {
         const normalized = normalizeProfile(profile);
         const entry = { profile_id: profile.id, provider: normalized.provider, label: profile.name || normalized.provider,
             models: normalized.model ? [{ model: normalized.model }] : [], supported: false };
         try {
-            const credentials = mappingCredentials(profile, context, { provider: normalized.provider });
-            const cacheKey = `${context.directory}|chat|${profile.id}`;
-            const cached = MODEL_CACHE.get(cacheKey);
-            const listed = cached && Date.now() - cached.ts < MODEL_CACHE_TTL_MS ? cached.value
-                : (discover === 'all' || discover === profile.id) ? await listModelsForProfileUncached(profile.id, 'chat', credentials) : null;
-            if (listed)
-                MODEL_CACHE.set(cacheKey, { ts: Date.now(), value: listed });
-            if (listed?.ok) {
-                const windows = listed.context_windows || {};
-                entry.models = sorted_unique([...listed.models, ...(normalized.model ? [normalized.model] : [])])
-                    .map(model => ({ model, ...(windows[model] ? { context_window_tokens: windows[model] } : {}) }));
-            }
-            else if (listed)
-                entry.reason = listed.message;
-            if (!listed && normalized.model && Number.isInteger(profile.context_window_tokens) && profile.context_window_tokens > 0) {
+            mappingCredentials(profile, context, { provider: normalized.provider });
+            if (normalized.model && Number.isInteger(profile.context_window_tokens) && profile.context_window_tokens > 0) {
                 entry.models[0].context_window_tokens = profile.context_window_tokens;
             }
             entry.supported = true;
@@ -24640,7 +24631,7 @@ async function mappingCatalog(context, discover) {
             entry.reason = error.message;
         }
         return entry;
-    }));
+    });
 }
 async function resolveMappingSelection(selection, context, native = false) {
     if (!selection || typeof selection.provider !== 'string' || typeof selection.model !== 'string' || !selection.model.trim()) {
@@ -24654,7 +24645,7 @@ async function resolveMappingSelection(selection, context, native = false) {
     if (!profile)
         throw Object.assign(new Error('Configured ST connection not found'), { status: 400 });
     const credentials = mappingCredentials(native ? { ...profile, 'secret-id': undefined, secretId: undefined, api_key: undefined } : profile, context, selection, native);
-    const catalog = (await mappingCatalog(context)).find(p => p.profile_id === profile.id);
+    const catalog = mappingCatalog(context).find(p => p.profile_id === profile.id);
     const capacity = catalog?.models.find((model) => model.model === selection.model)?.context_window_tokens
         ?? (native && Number.isInteger(selection.context_window_tokens) && selection.context_window_tokens > 0 ? selection.context_window_tokens : undefined);
     return { provider: 'openai', base_url: credentials.baseUrl, api_key: credentials.key, chat_model: selection.model,
@@ -24664,7 +24655,8 @@ async function resolveMappingSelection(selection, context, native = false) {
 function modelMappingProjection(config, providers) {
     const llm = config.llm || {};
     const selectors = (rows = {}) => Object.fromEntries(Object.entries(rows).map(([role, row]) => [role, { source: row.source, ...(row.selection ? { selection: row.selection } : {}) }]));
-    return { claude_code: config.claude_code === true, reply_models: selectors(llm.reply_models), step_models: selectors(llm.step_models),
+    return { claude_code: config.claude_code === true, mental_health_query: config.retrieve?.mental_health_query === true,
+        reply_models: selectors(llm.reply_models), step_models: selectors(llm.step_models),
         st_selected: llm.st_selected?.selection ? { selection: llm.st_selected.selection } : null,
         base_model: { provider: llm.provider, model: llm.chat_model }, providers };
 }
@@ -24679,8 +24671,7 @@ async function proxyModelMappings(req, res) {
         const context = mappingContext(req);
         const srv = await ensureLocalServer(readPluginConfig());
         if (req.method === 'GET') {
-            if (!req.query?.models)
-                await httpJson(srv.baseUrl, '/reload', 'POST', {});
+            await httpJson(srv.baseUrl, '/reload', 'POST', {});
         }
         else {
             const body = req.body || {};
@@ -24690,6 +24681,12 @@ async function proxyModelMappings(req, res) {
                 if (typeof body.claude_code !== 'boolean')
                     throw Object.assign(new Error('claude_code must be boolean'), { status: 400 });
                 patch.claude_code = body.claude_code;
+            }
+            if (body.mental_health_query !== undefined) {
+                if (typeof body.mental_health_query !== 'boolean')
+                    throw Object.assign(new Error('mental_health_query must be boolean'), { status: 400 });
+                const current = await httpJson(srv.baseUrl, '/config', 'GET');
+                patch.retrieve = { ...current.config.retrieve, mental_health_query: body.mental_health_query };
             }
             for (const [group, roles] of Object.entries({ reply_models: ['srmm', 'other_apps'], step_models: ['preprocess', 'memory_extract', 'category_update', 'reflection', 'consolidation'] })) {
                 if (body[group] === undefined)
@@ -24715,7 +24712,7 @@ async function proxyModelMappings(req, res) {
             await httpJson(srv.baseUrl, '/config', 'POST', patch);
         }
         const result = await httpJson(srv.baseUrl, '/config', 'GET');
-        res.json(modelMappingProjection(result.config, await mappingCatalog(context, typeof req.query?.models === 'string' ? req.query.models : undefined)));
+        res.json(modelMappingProjection(result.config, mappingCatalog(context)));
     }
     catch (error) {
         res.status(Number.isInteger(error.status) ? error.status : 503).json({ error: error.detail || error.message || String(error) });
@@ -24869,6 +24866,7 @@ function spawnExternalServer(pythonExe, runPyPath, cfg) {
             console.log(chalk_1.default.gray(consts_1.MODULE_NAME), `pid=${childPid || 'unknown'}`);
         }
         catch { /* ignore */ }
+        return childPid;
     }
     catch (e) {
         const msg = e?.message ? String(e.message) : String(e);
@@ -24876,6 +24874,7 @@ function spawnExternalServer(pythonExe, runPyPath, cfg) {
             console.error(chalk_1.default.red(consts_1.MODULE_NAME), 'Spawn failed:', msg);
         }
         catch { /* ignore */ }
+        return null;
     }
 }
 async function waitForServerHealthy(baseUrl) {
@@ -24910,31 +24909,28 @@ async function isServerHealthy(baseUrl) {
 async function ensureLocalServer(cfg, opts = {}) {
     // External server (mcp-memu-server). No Python probing required here.
     const baseUrl = getExternalServerBaseUrl(cfg);
-    const autoStartServer = cfg.autoStartServer !== false;
-    const launcherManaged = process.env.MEMU_SERVER_MANAGED === 'launcher';
-    const shouldStartIfDown = !launcherManaged && (autoStartServer || opts.forceStart === true);
+    const shouldStartIfDown = opts.forceStart === true;
+    let startedPid = null;
     const okNow = await isServerHealthy(baseUrl);
     if (!okNow) {
         if (shouldStartIfDown) {
-            // Start-on-demand: if server isn't healthy, try to spawn it (no shell) and then wait briefly.
+            // Only explicit Start or ST's optional startup hook may launch the server.
             const runPy = getExternalServerRunPy(cfg);
             if (runPy && fs_1.default.existsSync(runPy)) {
                 const now = Date.now();
                 if (now >= _externalSpawnCooldownUntilUnixMs) {
                     _externalSpawnCooldownUntilUnixMs = now + 5000;
                     const pythonExe = getExternalServerPython(cfg);
-                    spawnExternalServer(pythonExe, runPy, cfg);
+                    startedPid = spawnExternalServer(pythonExe, runPy, cfg);
                 }
             }
             await waitForServerHealthy(baseUrl);
         }
         if (!(await isServerHealthy(baseUrl))) {
-            if (launcherManaged)
-                throw new Error("Start memU Server in OpenAlma Launcher.");
             if (shouldStartIfDown) {
                 throw new Error("mcp-memu-server did not become healthy");
             }
-            throw new Error("mcp-memu-server is not healthy (autoStartServer=false)");
+            throw new Error("memU Server is stopped. Click Start.");
         }
     }
     let host = '127.0.0.1';
@@ -24948,7 +24944,7 @@ async function ensureLocalServer(cfg, opts = {}) {
         const msg = e?.message ? String(e.message) : String(e);
         throw new Error(`MEMU_SERVER_URL is not a valid URL: ${baseUrl} (${msg})`);
     }
-    return { baseUrl, host, port };
+    return { baseUrl, host, port, ...(startedPid ? { startedPid } : {}) };
 }
 async function _externalServerHealthInfo(baseUrl) {
     try {
@@ -25052,9 +25048,9 @@ async function externalServerStart() {
         return { ok: false, message: msg, status: await externalServerStatus() };
     }
 }
-async function externalServerStop() {
+async function externalServerStop(config) {
     try {
-        const cfg = readPluginConfig();
+        const cfg = config || readPluginConfig();
         const baseUrl = getExternalServerBaseUrl(cfg);
         const healthBefore = await _externalServerHealthInfo(baseUrl);
         if (!healthBefore.healthy) {
@@ -25090,6 +25086,47 @@ async function externalServerStop() {
     catch (e) {
         const msg = e?.message ? String(e.message) : String(e);
         return { ok: false, message: msg, status: await externalServerStatus() };
+    }
+}
+let _stStartedServer = null;
+async function startServerWithSillyTavern() {
+    try {
+        const cfg = readPluginConfig();
+        if (!cfg.autoStartServer)
+            return;
+        const started = await ensureLocalServer(cfg, { forceStart: true });
+        if (!started.startedPid)
+            return;
+        const health = await _externalServerHealthInfo(started.baseUrl);
+        if (health.serverInstanceId) {
+            _stStartedServer = { cfg, instanceId: health.serverInstanceId };
+        }
+    }
+    catch (error) {
+        console.warn('[memu] ST automatic startup failed:', error);
+    }
+}
+async function stopServerWithSillyTavern() {
+    const started = _stStartedServer;
+    _stStartedServer = null;
+    if (!started)
+        return;
+    try {
+        const baseUrl = getExternalServerBaseUrl(started.cfg);
+        const health = await _externalServerHealthInfo(baseUrl);
+        if (!health.healthy || health.serverInstanceId !== started.instanceId)
+            return;
+        const iris = await httpJson(baseUrl, '/integration/mentra/status', 'GET', undefined, 2000);
+        if (iris?.busy !== false) {
+            console.warn('[memu] Leaving MCP running: Iris is active or its activity is unknown.');
+            return;
+        }
+        const result = await externalServerStop(started.cfg);
+        if (!result.ok)
+            console.warn('[memu] ST automatic shutdown was not confirmed:', result.message);
+    }
+    catch (error) {
+        console.warn('[memu] Leaving MCP running: ST automatic shutdown could not be confirmed:', error);
     }
 }
 function registerServerControl(router) {
@@ -25311,9 +25348,6 @@ async function proxyConversationRetrieve(req, res) {
         }
         if (req.body?.soul_card) {
             payload.soul_card = req.body.soul_card;
-        }
-        if (typeof req.body?.mentalHealthAddon === "boolean") {
-            payload.mental_health_addon = req.body.mentalHealthAddon;
         }
         const resp = await httpJson(srv.baseUrl, `/conversation/${encodeURIComponent(conversationId)}/retrieve`, "POST", payload);
         res.json(resp);

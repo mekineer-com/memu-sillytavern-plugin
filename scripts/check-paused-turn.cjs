@@ -53,6 +53,12 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
     conversationId: 'integrity:test-main', conversation: messages, chat_name: 'TestSoul', source_message_count: 6, intent: 'manual', runtimeSettings: settings } };
   let body, httpStatus;
   const res = { json: value => { body = value; }, status: value => { httpStatus = value; return res; } };
+  const memoryBuilder = context.buildMemuPayloadForLocal;
+  context.buildMemuPayloadForLocal = () => ({});
+  response = { ok: true };
+  await context.exports.proxyConversationRetrieve({ body: { userId: 'TestOwner', soulId: 'TestSoul', conversationId: 'test-chat', query: 'Draft' } }, res);
+  assert.equal(Object.hasOwn(wire, 'mental_health_addon'), false, 'ST retrieval must inherit the server setting');
+  context.buildMemuPayloadForLocal = memoryBuilder;
   for (const status of ['accepted', 'started', 'waiting_for_import', 'deferred', 'nothing_to_memorize', 'published', 'coalesced']) {
     response = { status };
     await context.exports.proxyMemorizeConversation(req, res);
@@ -201,6 +207,7 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
   const initCode = indexSource.slice(indexSource.indexOf('export async function init('), indexSource.indexOf('export async function exit('));
   const registered = [];
   const initContext = { exports: {}, express: { json: () => 'fake-json-middleware' },
+    startServerWithSillyTavern: async () => {},
     chalk: { green: value => value }, MODULE_NAME: 'memu', console: { log() {} } };
   for (const [, name] of initCode.matchAll(/\b(register\w+)\(router\);/g)) initContext[name] = () => {};
   initContext.registerDeleteConversationSource = context.exports.registerDeleteConversationSource;

@@ -71,11 +71,13 @@ export declare function externalServerStart(): Promise<{
     message?: string;
     status?: any;
 }>;
-export declare function externalServerStop(): Promise<{
+export declare function externalServerStop(config?: MemuPluginConfig): Promise<{
     ok: boolean;
     message?: string;
     status?: any;
 }>;
+export declare function startServerWithSillyTavern(): Promise<void>;
+export declare function stopServerWithSillyTavern(): Promise<void>;
 export declare function registerServerControl(router: Router): void;
 export declare function proxyMemorizeConversation(req: Request, res: Response): Promise<void>;
 export declare function proxyGetTaskStatus(req: Request, res: Response): Promise<void>;

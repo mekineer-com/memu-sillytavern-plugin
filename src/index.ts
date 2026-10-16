@@ -27,6 +27,8 @@ import {
   setPluginConfig,
   registerServerControl,
   registerCancelMemorize,
+  startServerWithSillyTavern,
+  stopServerWithSillyTavern,
 } from './memu-endpoint';
 
 interface PluginInfo {
@@ -127,10 +129,13 @@ export async function init(router: Router): Promise<void> {
   registerMetaEndpoints(router);
   registerServerControl(router);
 
+  await startServerWithSillyTavern();
+
   console.log(chalk.green(MODULE_NAME), 'Plugin initialized');
 }
 
 export async function exit(): Promise<void> {
+  await stopServerWithSillyTavern();
   console.log(chalk.yellow(MODULE_NAME), 'Plugin exited');
 }
 

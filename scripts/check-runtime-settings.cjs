@@ -81,25 +81,60 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
         lifecycle.readPluginConfig = () => { throw new Error('Fictional config failure'); };
         assert.equal((await lifecycle.exports.externalServerStatus()).managedByLauncher, managed);
         lifecycle.readPluginConfig = () => cfg;
-        const shouldStart = !managed && (autoStartServer || forceStart);
+        const shouldStart = forceStart;
         if (shouldStart) await lifecycle.ensureLocalServer(cfg, { forceStart });
-        else await assert.rejects(lifecycle.ensureLocalServer(cfg, { forceStart }), managed ? /Start memU Server in OpenAlma Launcher/ : /autoStartServer=false/);
+        else await assert.rejects(lifecycle.ensureLocalServer(cfg, { forceStart }), /Click Start/);
         assert.equal(spawns, shouldStart ? 1 : 0);
         assert.equal(cfg.autoStartServer, autoStartServer);
         healthy = true;
         await lifecycle.ensureLocalServer(cfg, { forceStart });
         assert.equal(spawns, shouldStart ? 1 : 0);
-        if (managed) {
-          healthy = false;
-          await assert.rejects(lifecycle.ensureLocalServer(cfg, { forceStart }), /Start memU Server in OpenAlma Launcher/);
-          healthy = true;
-          await lifecycle.ensureLocalServer(cfg, { forceStart });
-          assert.equal(spawns, 0);
-        }
       }
     }
   }
-  console.log('Managed requests never spawn; standalone auto-start and explicit Start remain intact.');
+  console.log('Ordinary requests never spawn; explicit Start remains available in both launch modes.');
+  const hookCode = slice('let _stStartedServer:', 'export function registerServerControl(');
+  function hooks({ managed = false, enabled = true, startedPid = 42, busy = false } = {}) {
+    const cfg = { serverPath: '/fictional/server', autoStartServer: enabled };
+    const calls = { starts: 0, stops: 0, warnings: [], cfg, instance: 'fictional-instance', busy };
+    const env = { exports: {}, process: { env: managed ? { MEMU_SERVER_MANAGED: 'launcher' } : {} },
+      readPluginConfig: () => cfg,
+      ensureLocalServer: async () => { calls.starts++; return { baseUrl: 'http://fictional.invalid', startedPid }; },
+      getExternalServerBaseUrl: actual => { assert.equal(actual, cfg); return 'http://fictional.invalid'; },
+      _externalServerHealthInfo: async () => ({ healthy: true, serverInstanceId: calls.instance }),
+      httpJson: async (_base, route) => { assert.equal(route, '/integration/mentra/status'); return { busy: calls.busy }; },
+      externalServerStop: async actual => { assert.equal(actual, cfg); calls.stops++; return { ok: true }; },
+      console: { warn: (...args) => calls.warnings.push(args) },
+    };
+    vm.runInNewContext(ts.transpileModule(hookCode, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, env);
+    return { calls, env, start: env.exports.startServerWithSillyTavern, stop: env.exports.stopServerWithSillyTavern };
+  }
+  for (const managed of [false, true]) {
+    const disabled = hooks({ managed, enabled: false }); await disabled.start(); await disabled.stop();
+    assert.equal(disabled.calls.starts, 0); assert.equal(disabled.calls.stops, 0);
+    const running = hooks({ managed, startedPid: null }); await running.start(); await running.stop();
+    assert.equal(running.calls.starts, 1); assert.equal(running.calls.stops, 0);
+    const launched = hooks({ managed }); await launched.start(); await launched.stop();
+    assert.equal(launched.calls.starts, 1); assert.equal(launched.calls.stops, 1);
+  }
+  const replacement = hooks(); await replacement.start(); replacement.calls.instance = 'replacement';
+  await replacement.stop(); assert.equal(replacement.calls.stops, 0);
+  for (const busy of [true, undefined]) {
+    const hook = hooks(); await hook.start(); hook.calls.busy = busy;
+    await hook.stop(); assert.equal(hook.calls.stops, 0); assert.equal(hook.calls.warnings.length, 1);
+  }
+  const unknown = hooks(); await unknown.start();
+  unknown.env.httpJson = async () => { throw new Error('Fictional Iris status failure'); };
+  await unknown.stop(); assert.equal(unknown.calls.stops, 0); assert.equal(unknown.calls.warnings.length, 1);
+  const failed = hooks(); failed.env.ensureLocalServer = async () => { throw new Error('Fictional startup failure'); };
+  await failed.start(); await failed.stop(); assert.equal(failed.calls.stops, 0); assert.equal(failed.calls.warnings.length, 1);
+  const owned = hooks(); await owned.start();
+  owned.env.readPluginConfig = () => { throw new Error('Shutdown must use the captured server configuration'); };
+  await owned.stop(); await owned.stop(); assert.equal(owned.calls.stops, 1);
+  const entrySource = fs.readFileSync(`${__dirname}/../src/index.ts`, 'utf8');
+  assert(entrySource.includes('await startServerWithSillyTavern();'));
+  assert(entrySource.includes('await stopServerWithSillyTavern();'));
+  console.log('ST hooks: both launch modes respect Auto Start, disabled/existing/replaced cases retained, spawned instance stopped once without PID inspection, busy/unknown Iris retained.');
   const routes = [];
   soulContext.exports.registerSouls({ get: route => routes.push(route), post: route => routes.push(route) });
   assert(routes.includes('/souls/:soulId'));
@@ -129,13 +164,13 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   const ownDir = '/fake/user-A';
   const profiles = [
     { id: 'a', name: 'A', mode: 'cc', api: 'openai', model: 'same-name', 'api-url': 'https://a.invalid/v1', 'secret-id': 'a-key', context_window_tokens: 8000 },
-    { id: 'b', name: 'B', mode: 'cc', api: 'openrouter', model: 'same-name', 'api-url': 'https://b.invalid/v1', 'secret-id': 'b-key' },
+    { id: 'b', name: 'B', mode: 'cc', api: 'openrouter', model: 'same-name', 'api-url': 'https://b.invalid/v1', 'secret-id': 'b-key', context_window_tokens: 7000 },
     { id: 'unsupported', name: 'Native Claude', mode: 'cc', api: 'claude', model: 'native-model', 'api-url': 'https://claude.invalid' },
     { id: 'local', name: 'Local Ollama compatible endpoint', mode: 'tc', api: 'ollama', model: 'local-model', 'api-url': 'http://localhost:11434' },
   ];
   const settings = { extension_settings: { connectionManager: { profiles } }, oai_settings: { openai_model: 'same-name', mistralai_model: 'mistral-native', custom_model: 'custom-local', custom_url: 'http://localhost:1234/v1' } };
   const secrets = { api_key_openai: [{ id: 'a-key', value: 'own-a-key', active: true }], api_key_openrouter: [{ id: 'b-key', value: 'own-b-key', active: true }], api_key_mistralai: 'native-mistral-key' };
-  let canonical = { claude_code: false, llm: { provider: 'openai', chat_model: 'custom-base', api_key: 'base-key', embedding: { api_key: 'embedding-key' }, reply_models: { srmm: { source: 'config' }, other_apps: { source: 'config' } }, step_models: { reflection: { source: 'config' } } } };
+  let canonical = { claude_code: false, retrieve: { mental_health_query: true, top_k: 7 }, llm: { provider: 'openai', chat_model: 'custom-base', api_key: 'base-key', embedding: { api_key: 'embedding-key' }, reply_models: { srmm: { source: 'config' }, other_apps: { source: 'config' } }, step_models: { reflection: { source: 'config' } } } };
   let coreWrites = 0, reloads = 0, discoveries = 0;
   const mapping = { exports: {}, URL, path: require('node:path'), fs: { readFileSync: fs.readFileSync },
     getStRoot: () => require('node:path').resolve(__dirname, '../../..'),
@@ -144,11 +179,12 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
     _stProviderUrls: { openai: 'https://openai.invalid/v1', mistralai: 'https://mistral.invalid/v1' },
     resolveProfileBaseUrl: (_profile, normalized) => normalized.baseUrl,
     sorted_unique: values => [...new Set(values)].sort(), MODEL_CACHE: new Map(), MODEL_CACHE_TTL_MS: 60000,
-    listModelsForProfileUncached: async (_id, _kind, credentials) => { discoveries++; assert(credentials.baseUrl); return { ok: true, models: ['same-name', 'second-model'], context_windows: { 'second-model': 7000 } }; },
+    listModelsForProfileUncached: async () => { discoveries++; assert.fail('Mapping choices must not fetch provider catalogs'); },
     httpJson: async (_base, route, method, body) => {
       if (route === '/reload') { reloads++; return { ok: true }; }
       assert.equal(route, '/config');
       if (method === 'POST') { coreWrites++; if (body.claude_code !== undefined) canonical.claude_code = body.claude_code;
+        if (body.retrieve !== undefined) canonical.retrieve = body.retrieve;
         for (const [key, value] of Object.entries(body.llm || {})) canonical.llm[key] = key === 'st_selected' ? value : { ...canonical.llm[key], ...value }; }
       return { ok: true, config: canonical };
     },
@@ -167,6 +203,17 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   assert.equal(projection.providers.find(p => p.profile_id === 'local').supported, true);
   assert(projection.providers.some(p => p.profile_id === 'native:cc:mistralai' && p.supported));
   assert(!JSON.stringify(projection).includes('own-a-key')); assert(!JSON.stringify(projection).includes('embedding-key'));
+  assert.equal(projection.mental_health_query, true);
+  const originalLlm = JSON.stringify(canonical.llm);
+  for (const enabled of [false, true]) {
+    await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { mental_health_query: enabled } }, mappingRes);
+    assert.equal(projection.mental_health_query, enabled);
+    assert.deepEqual(normalize(canonical.retrieve), { mental_health_query: enabled, top_k: 7 });
+    assert.equal(JSON.stringify(canonical.llm), originalLlm);
+  }
+  const beforeInvalid = coreWrites;
+  await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { mental_health_query: 'false' } }, mappingRes);
+  assert.equal(status, 400); assert.equal(coreWrites, beforeInvalid);
   const before = coreWrites;
   await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { reply_models: { srmm: { source: 'configured', selection: { profile_id: 'a', provider: 'openai', model: 'same-name', api_key: 'forged-key' }, resolved: { api_key: 'forged-key' } } } } }, mappingRes);
   assert.equal(coreWrites, before + 1); assert.equal(discoveries, 0);
@@ -174,9 +221,13 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   assert.equal(canonical.llm.reply_models.srmm.resolved.context_window_tokens, 8000);
   assert.equal(Object.hasOwn(canonical.llm.reply_models.srmm.selection, 'api_key'), false);
   assert.equal(canonical.llm.embedding.api_key, 'embedding-key'); assert.equal(canonical.llm.api_key, 'base-key');
-  await mapping.exports.proxyModelMappings({ ...request, query: { models: 'all' } }, mappingRes);
-  assert.equal(reloads, 1); assert.equal(coreWrites, before + 1); assert(discoveries > 1);
-  await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { step_models: { reflection: { source: 'configured', selection: { profile_id: 'b', provider: 'openrouter', model: 'second-model' } } } } }, mappingRes);
+  mapping.MODEL_CACHE.set(`${ownDir}|chat|a`, { ts: Date.now(), value: { ok: true, models: ['same-name', 'unconfigured-model'] } });
+  await mapping.exports.proxyModelMappings(request, mappingRes);
+  assert.equal(reloads, 2); assert.equal(coreWrites, before + 1); assert.equal(discoveries, 0);
+  for (const profile of profiles) {
+    assert.deepEqual(normalize(projection.providers.find(p => p.profile_id === profile.id).models.map(row => row.model)), [profile.model]);
+  }
+  await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { step_models: { reflection: { source: 'configured', selection: { profile_id: 'b', provider: 'openrouter', model: 'same-name' } } } } }, mappingRes);
   assert.equal(canonical.llm.step_models.reflection.resolved.api_key, 'own-b-key');
   assert.equal(canonical.llm.step_models.reflection.resolved.context_window_tokens, 7000);
   await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body: { st_selected: { selection: { profile_id: 'native:cc:custom', provider: 'custom', model: 'custom-local', base_url: 'http://localhost:1234/v1', context_window_tokens: 9000 } } } }, mappingRes);
@@ -199,6 +250,6 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   const beforeUnauthenticated = reloads;
   await mapping.exports.proxyModelMappings({ method: 'GET' }, mappingRes);
   assert.equal(status, 403); assert.equal(reloads, beforeUnauthenticated);
-  console.log('Actual mapping bridge: startup reload, scoped credentials, keyless/native transports, capacities, lazy catalog, masking and refusals pass.');
+  console.log('Actual mapping bridge: startup reload, configured models only, scoped credentials, keyless/native transports, capacities, masking and refusals pass.');
 
 })().catch(error => { console.error(error); process.exitCode = 1; });
