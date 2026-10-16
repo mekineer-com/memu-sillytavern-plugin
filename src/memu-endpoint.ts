@@ -72,10 +72,7 @@ const DEFAULT_CONFIG: MemuPluginConfig = {
   // External memU server folder (mcp-memu-server). In local mode we derive:
   //   baseUrl: http://127.0.0.1:8099  (or env MEMU_SERVER_URL)
   //   command: <serverPath>/run.py (spawned via python, no shell)
-  serverPath: (() => {
-    const home = String(process.env.HOME || process.env.USERPROFILE || '').trim();
-    return home ? path.join(home, 'apps', 'mcp-memu-server') : undefined;
-  })(),
+  serverPath: String(process.env.MEMU_SERVER_PATH || '').trim() || undefined,
   autoStartServer: true,
   embeddingBatchSize: 25,
   updatedAt: new Date().toISOString(),
@@ -167,9 +164,7 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
     Number.isFinite(embeddingBatchSize) && embeddingBatchSize > 0 ? Math.floor(embeddingBatchSize) : 25;
   // External server settings (local mode): only serverPath is user-configurable.
   const serverPathRaw = String((cfg as any).serverPath || '').trim();
-  const home2 = String(process.env.HOME || process.env.USERPROFILE || '').trim();
-  const defaultPath = home2 ? path.join(home2, 'apps', 'mcp-memu-server') : '';
-  (cfg as any).serverPath = (serverPathRaw || defaultPath || '').trim() || undefined;
+  (cfg as any).serverPath = serverPathRaw || DEFAULT_CONFIG.serverPath;
   (cfg as any).autoStartServer = ((cfg as any).autoStartServer !== false);
 
   cfg.updatedAt = new Date().toISOString();

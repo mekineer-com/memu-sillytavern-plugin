@@ -17,7 +17,7 @@ const context = {
   _cachedPluginConfig: null,
   exports: {}, getConfigPath: () => 'test-config.json',
   fs: { writeFileSync: (_path, json) => { persisted = JSON.parse(json); } },
-  process: { env: {} }, path: require('node:path'),
+  process: { env: { HOME: '/fictional/home', USERPROFILE: '/fictional/profile' } }, path: require('node:path'),
   resolveProfileCredentials(id) {
     resolved.push(id);
     return { ok: true, provider: 'openai', baseUrl: 'https://test.invalid/v1', key: 'fictional-key', model: id };
@@ -25,6 +25,13 @@ const context = {
   mapSTProviderToMemU: () => ({ provider: 'openai' }),
 };
 vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
+assert.equal(context.sanitizeIncomingConfig({}).serverPath, undefined);
+assert.equal(context.sanitizeIncomingConfig({ serverPath: '  ' }).serverPath, undefined);
+const managed = { ...context, exports: {}, process: { env: { MEMU_SERVER_PATH: ' /fictional/managed/server ' } } };
+vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, managed);
+assert.equal(managed.sanitizeIncomingConfig({}).serverPath, '/fictional/managed/server');
+assert.equal(managed.sanitizeIncomingConfig({ serverPath: '  ' }).serverPath, '/fictional/managed/server');
+assert.equal(managed.sanitizeIncomingConfig({ serverPath: '/fictional/manual/server' }).serverPath, '/fictional/manual/server');
 const normalize = value => JSON.parse(JSON.stringify(value));
 const saved = { serverPath: '/fictional/server', autoStartServer: false, embeddingBatchSize: 9,
   useServerSettings: false, useClaudeCode: true, defaultProfileId: 'obsolete', stepProfileId: { reflection: 'obsolete' } };
