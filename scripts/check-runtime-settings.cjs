@@ -26,6 +26,8 @@ const context = {
 };
 vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
 assert.equal(context.sanitizeIncomingConfig({}).serverPath, undefined);
+assert.equal(context.sanitizeIncomingConfig({ autoStartServer: true }).autoStartWithSillyTavern, false,
+  'The retired request-triggered default must not enable the new lifecycle option');
 assert.equal(context.sanitizeIncomingConfig({ serverPath: '  ' }).serverPath, undefined);
 const managed = { ...context, exports: {}, process: { env: { MEMU_SERVER_PATH: ' /fictional/managed/server ' } } };
 vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, managed);
@@ -33,12 +35,12 @@ assert.equal(managed.sanitizeIncomingConfig({}).serverPath, '/fictional/managed/
 assert.equal(managed.sanitizeIncomingConfig({ serverPath: '  ' }).serverPath, '/fictional/managed/server');
 assert.equal(managed.sanitizeIncomingConfig({ serverPath: '/fictional/manual/server' }).serverPath, '/fictional/manual/server');
 const normalize = value => JSON.parse(JSON.stringify(value));
-const saved = { serverPath: '/fictional/server', autoStartServer: false, embeddingBatchSize: 9,
+const saved = { serverPath: '/fictional/server', autoStartWithSillyTavern: false, embeddingBatchSize: 9,
   useServerSettings: false, useClaudeCode: true, defaultProfileId: 'obsolete', stepProfileId: { reflection: 'obsolete' } };
 const cfg = context.sanitizeIncomingConfig(saved);
 context.exports.setPluginConfig(cfg);
 for (const key of ['useServerSettings', 'useClaudeCode', 'defaultProfileId', 'stepProfileId']) assert.equal(Object.hasOwn(persisted, key), false);
-assert.equal(persisted.serverPath, saved.serverPath); assert.equal(persisted.autoStartServer, false); assert.equal(persisted.embeddingBatchSize, 9);
+assert.equal(persisted.serverPath, saved.serverPath); assert.equal(persisted.autoStartWithSillyTavern, false); assert.equal(persisted.embeddingBatchSize, 9);
 context.resolveProfileCredentials = () => assert.fail('Metadata must not resolve obsolete profiles');
 const payload = normalize(context.buildMemuPayloadForLocal(cfg, 'TestOwner', 'TestSoul', [{ role: 'user', content: 'Fictional message' }], { conversationId: ' test-chat ' }));
 assert.deepEqual(payload.user, { user_id: 'TestOwner', soul_id: 'TestSoul' }); assert.equal(payload.conversation_id, 'test-chat');
@@ -55,7 +57,7 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
 }).outputText, soulContext);
 (async () => {
   for (const managed of [false, true]) {
-    for (const autoStartServer of [false, true]) {
+    for (const autoStartWithSillyTavern of [false, true]) {
       for (const forceStart of [false, true]) {
         let healthy = false, spawns = 0;
         const lifecycle = {
@@ -75,17 +77,17 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
           + slice('export async function externalServerStatus(', 'export async function externalServerPingInfo('), {
           compilerOptions: { module: ts.ModuleKind.CommonJS },
         }).outputText, lifecycle);
-        const cfg = { autoStartServer, serverPath: '/fictional/saved/server' };
+        const cfg = { autoStartWithSillyTavern, serverPath: '/fictional/saved/server' };
         lifecycle.readPluginConfig = () => cfg;
-        assert.equal((await lifecycle.exports.externalServerStatus()).managedByLauncher, managed);
+        assert.equal((await lifecycle.exports.externalServerStatus()).ok, true);
         lifecycle.readPluginConfig = () => { throw new Error('Fictional config failure'); };
-        assert.equal((await lifecycle.exports.externalServerStatus()).managedByLauncher, managed);
+        assert.equal((await lifecycle.exports.externalServerStatus()).ok, false);
         lifecycle.readPluginConfig = () => cfg;
         const shouldStart = forceStart;
         if (shouldStart) await lifecycle.ensureLocalServer(cfg, { forceStart });
         else await assert.rejects(lifecycle.ensureLocalServer(cfg, { forceStart }), /Click Start/);
         assert.equal(spawns, shouldStart ? 1 : 0);
-        assert.equal(cfg.autoStartServer, autoStartServer);
+        assert.equal(cfg.autoStartWithSillyTavern, autoStartWithSillyTavern);
         healthy = true;
         await lifecycle.ensureLocalServer(cfg, { forceStart });
         assert.equal(spawns, shouldStart ? 1 : 0);
@@ -93,17 +95,21 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
     }
   }
   console.log('Ordinary requests never spawn; explicit Start remains available in both launch modes.');
-  const hookCode = slice('let _stStartedServer:', 'export function registerServerControl(');
+  const hookCode = slice('export async function externalServerStop(', 'export function registerServerControl(');
   function hooks({ managed = false, enabled = true, startedPid = 42, busy = false } = {}) {
-    const cfg = { serverPath: '/fictional/server', autoStartServer: enabled };
-    const calls = { starts: 0, stops: 0, warnings: [], cfg, instance: 'fictional-instance', busy };
+    const cfg = { serverPath: '/fictional/server', autoStartWithSillyTavern: enabled };
+    const calls = { starts: 0, stops: 0, warnings: [], cfg, instance: 'fictional-instance', busy, alive: true };
     const env = { exports: {}, process: { env: managed ? { MEMU_SERVER_MANAGED: 'launcher' } : {} },
       readPluginConfig: () => cfg,
       ensureLocalServer: async () => { calls.starts++; return { baseUrl: 'http://fictional.invalid', startedPid }; },
       getExternalServerBaseUrl: actual => { assert.equal(actual, cfg); return 'http://fictional.invalid'; },
-      _externalServerHealthInfo: async () => ({ healthy: true, serverInstanceId: calls.instance }),
-      httpJson: async (_base, route) => { assert.equal(route, '/integration/mentra/status'); return { busy: calls.busy }; },
-      externalServerStop: async actual => { assert.equal(actual, cfg); calls.stops++; return { ok: true }; },
+      _externalServerHealthInfo: async () => ({ healthy: calls.alive, serverInstanceId: calls.instance }),
+      externalServerStatus: async () => ({ ok: true, healthy: calls.alive }),
+      httpJson: async (_base, route, _method, body) => {
+        if (route === '/integration/mentra/status') return { busy: calls.busy };
+        assert.equal(route, '/admin/shutdown'); assert.equal(body.max_wait_sec, 0);
+        calls.stops++; calls.alive = false; return { ok: true };
+      },
       console: { warn: (...args) => calls.warnings.push(args) },
     };
     vm.runInNewContext(ts.transpileModule(hookCode, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, env);
@@ -131,6 +137,26 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   const owned = hooks(); await owned.start();
   owned.env.readPluginConfig = () => { throw new Error('Shutdown must use the captured server configuration'); };
   await owned.stop(); await owned.stop(); assert.equal(owned.calls.stops, 1);
+  const active = hooks({ busy: true });
+  assert.equal((await active.env.exports.externalServerStop()).ok, false);
+  assert.equal((await active.env.exports.externalServerStop(undefined, true)).ok, false);
+  assert.equal(active.calls.stops, 0);
+  const unchecked = hooks(); unchecked.calls.busy = undefined;
+  assert.equal((await unchecked.env.exports.externalServerStop()).confirmationRequired, true);
+  assert.equal(unchecked.calls.stops, 0);
+  assert.equal((await unchecked.env.exports.externalServerStop(undefined, true)).ok, true);
+  assert.equal(unchecked.calls.stops, 1);
+  const healthEnv = { exports: {}, process: { env: {} }, AbortSignal, _externalServerInstanceId: null, _externalServerEphemeralDb: null,
+    readPluginConfig: () => ({}), getExternalServerBaseUrl: () => 'http://fictional.invalid',
+    _getExternalLogFile: () => null, _readLogTail: () => [],
+    fetch: async () => { throw new Error('Fictional health timeout'); },
+  };
+  vm.runInNewContext(ts.transpileModule(slice('async function _externalServerHealthInfo(', 'export async function externalServerPingInfo('),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, healthEnv);
+  assert.equal((await healthEnv.exports.externalServerStatus()).ok, false, 'A timeout is unknown, not stopped');
+  healthEnv.fetch = async () => { throw Object.assign(new Error('Refused'), { cause: { code: 'ECONNREFUSED' } }); };
+  const offline = await healthEnv.exports.externalServerStatus();
+  assert.equal(offline.ok, true); assert.equal(offline.running, false);
   const entrySource = fs.readFileSync(`${__dirname}/../src/index.ts`, 'utf8');
   assert(entrySource.includes('await startServerWithSillyTavern();'));
   assert(entrySource.includes('await stopServerWithSillyTavern();'));
@@ -184,7 +210,7 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
       if (route === '/reload') { reloads++; return { ok: true }; }
       assert.equal(route, '/config');
       if (method === 'POST') { coreWrites++; if (body.claude_code !== undefined) canonical.claude_code = body.claude_code;
-        if (body.retrieve !== undefined) canonical.retrieve = body.retrieve;
+        if (body.retrieve !== undefined) canonical.retrieve = { ...canonical.retrieve, ...body.retrieve };
         for (const [key, value] of Object.entries(body.llm || {})) canonical.llm[key] = key === 'st_selected' ? value : { ...canonical.llm[key], ...value }; }
       return { ok: true, config: canonical };
     },

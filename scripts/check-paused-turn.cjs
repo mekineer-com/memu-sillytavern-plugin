@@ -144,7 +144,7 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
 
   const transportCalls = [];
   let configReads = 0, healthMode = 'ok', deleteStatus = 200, deleteResponse = { status: 'deleted' };
-  const secretConfig = { autoStartServer: true, apiKey: 'fictional-secret', defaultProfileId: 'broken-profile' };
+  const secretConfig = { autoStartWithSillyTavern: true, apiKey: 'fictional-secret', defaultProfileId: 'broken-profile' };
   context.readPluginConfig = () => { configReads++; return secretConfig; };
   context.ensureLocalServer = () => assert.fail('Source retirement must not auto-start memU');
   context.sanitizeIncomingConfig = () => assert.fail('Source retirement must not resolve runtime profiles');

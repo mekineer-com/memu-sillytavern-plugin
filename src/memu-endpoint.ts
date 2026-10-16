@@ -56,7 +56,7 @@ interface MemuPluginConfig {
 
   // External memU server (mcp-memu-server) folder.
   serverPath?: string;
-  autoStartServer?: boolean;
+  autoStartWithSillyTavern?: boolean;
 
   // Embeddings model fields (dropdown overrides manual).
   embeddingModelSelected?: string;
@@ -67,7 +67,7 @@ interface MemuPluginConfig {
 const CONFIG_FILENAME = "memu-plugin.config.json";
 
 const DEFAULT_CONFIG: MemuPluginConfig = {
-  autoStartServer: false,
+  autoStartWithSillyTavern: false,
   version: 4,
   // External memU server folder (mcp-memu-server). In local mode we derive:
   //   baseUrl: http://127.0.0.1:8099  (or env MEMU_SERVER_URL)
@@ -164,7 +164,7 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
   // External server settings (local mode): only serverPath is user-configurable.
   const serverPathRaw = String((cfg as any).serverPath || '').trim();
   (cfg as any).serverPath = serverPathRaw || DEFAULT_CONFIG.serverPath;
-  cfg.autoStartServer = cfg.autoStartServer === true;
+  cfg.autoStartWithSillyTavern = cfg.autoStartWithSillyTavern === true;
 
   cfg.updatedAt = new Date().toISOString();
   return cfg;
@@ -728,9 +728,9 @@ export async function listModelsForProfile(
   return result;
 }
 
-async function listModelsForProfileUncached(profileId: string, kind: ModelsKind, supplied?: NonNullable<ReturnType<typeof resolveProfileCredentials>>): Promise<{ ok: boolean; models: string[]; message?: string; context_windows?: Record<string, number> }> {
+async function listModelsForProfileUncached(profileId: string, kind: ModelsKind): Promise<{ ok: boolean; models: string[]; message?: string; context_windows?: Record<string, number> }> {
   try {
-    const cred = supplied || resolveProfileCredentials(profileId);
+    const cred = resolveProfileCredentials(profileId);
     if (!cred) return { ok: false, models: [], message: 'Profile not found.' };
     if (!cred.ok) return { ok: false, models: [], message: cred.message || 'Profile is missing base_url/model/api_key.' };
 
@@ -994,8 +994,7 @@ export async function proxyModelMappings(req: Request, res: Response): Promise<v
       }
       if (body.mental_health_query !== undefined) {
         if (typeof body.mental_health_query !== 'boolean') throw Object.assign(new Error('mental_health_query must be boolean'), { status: 400 });
-        const current = await httpJson(srv.baseUrl, '/config', 'GET');
-        patch.retrieve = { ...current.config.retrieve, mental_health_query: body.mental_health_query };
+        patch.retrieve = { mental_health_query: body.mental_health_query };
       }
       for (const [group, roles] of Object.entries({ reply_models: ['srmm', 'other_apps'], step_models: ['preprocess', 'memory_extract', 'category_update', 'reflection', 'consolidation'] })) {
         if (body[group] === undefined) continue;
@@ -1264,16 +1263,17 @@ type ExternalServerShutdownInfo = {
   activeWorkRequests: number;
 };
 
-async function _externalServerHealthInfo(baseUrl: string): Promise<{ healthy: boolean; serverInstanceId?: string | null; ephemeralDb?: boolean | null; shutdown?: ExternalServerShutdownInfo | null }> {
+async function _externalServerHealthInfo(baseUrl: string): Promise<{ healthy: boolean; unavailable?: boolean; serverInstanceId?: string | null; ephemeralDb?: boolean | null; shutdown?: ExternalServerShutdownInfo | null }> {
   try {
     const f: any = (globalThis as any).fetch;
-    if (!f) return { healthy: false };
+    if (!f) return { healthy: false, unavailable: true };
     const r = await f(baseUrl + '/health', { signal: AbortSignal.timeout(5_000) });
-    if (!r || !r.ok) return { healthy: false };
+    if (!r || !r.ok) return { healthy: false, unavailable: true };
 
     const txt = await r.text();
     let parsed: any = null;
-    try { parsed = txt ? JSON.parse(txt) : null; } catch { /* ignore */ }
+    try { parsed = txt ? JSON.parse(txt) : null; } catch { return { healthy: false, unavailable: true }; }
+    if (!parsed || typeof parsed !== 'object') return { healthy: false, unavailable: true };
 
     const serverInstanceId = parsed && typeof parsed.serverInstanceId === 'string' ? parsed.serverInstanceId : null;
     const ephemeralDb = parsed && typeof parsed.ephemeralDb === 'boolean' ? parsed.ephemeralDb : null;
@@ -1294,12 +1294,12 @@ async function _externalServerHealthInfo(baseUrl: string): Promise<{ healthy: bo
     _externalServerEphemeralDb = ephemeralDb;
 
     return { healthy: true, serverInstanceId, ephemeralDb, shutdown };
-  } catch {
-    return { healthy: false };
+  } catch (error: any) {
+    return { healthy: false, unavailable: (error?.cause?.code || error?.code) !== 'ECONNREFUSED' };
   }
 }
 
-export async function externalServerStatus(): Promise<{ ok: boolean; running: boolean; healthy: boolean; managedByLauncher: boolean; pid?: number | null; baseUrl?: string; logPath?: string | null; logTail?: string[]; serverInstanceId?: string | null; ephemeralDb?: boolean | null; shutdown?: ExternalServerShutdownInfo | null }> {
+export async function externalServerStatus(): Promise<{ ok: boolean; running: boolean; healthy: boolean; pid?: number | null; baseUrl?: string; logPath?: string | null; logTail?: string[]; serverInstanceId?: string | null; ephemeralDb?: boolean | null; shutdown?: ExternalServerShutdownInfo | null }> {
   try {
     const cfg = readPluginConfig();
 
@@ -1310,10 +1310,9 @@ export async function externalServerStatus(): Promise<{ ok: boolean; running: bo
     const logTail = _readLogTail(logPath, 25);
 
     return {
-      ok: true,
+      ok: !healthInfo.unavailable,
       running: healthy,
       healthy,
-      managedByLauncher: process.env.MEMU_SERVER_MANAGED === 'launcher',
       pid: null,
       baseUrl,
       logPath,
@@ -1323,7 +1322,7 @@ export async function externalServerStatus(): Promise<{ ok: boolean; running: bo
       shutdown: healthInfo.shutdown || null,
     };
   } catch (e: any) {
-    return { ok: false, running: false, healthy: false, managedByLauncher: process.env.MEMU_SERVER_MANAGED === 'launcher', pid: null };
+    return { ok: false, running: false, healthy: false, pid: null };
   }
 }
 
@@ -1367,14 +1366,30 @@ export async function externalServerStart(): Promise<{ ok: boolean; message?: st
   }
 }
 
-export async function externalServerStop(config?: MemuPluginConfig): Promise<{ ok: boolean; message?: string; status?: any }> {
+export async function externalServerStop(config?: MemuPluginConfig, confirmUnknown = false): Promise<{ ok: boolean; confirmationRequired?: boolean; message?: string; status?: any }> {
   try {
     const cfg = config || readPluginConfig();
 
     const baseUrl = getExternalServerBaseUrl(cfg);
     const healthBefore = await _externalServerHealthInfo(baseUrl);
+    if (healthBefore.unavailable) {
+      return { ok: false, message: 'memU Server status is unavailable.', status: await externalServerStatus() };
+    }
     if (!healthBefore.healthy) {
       return { ok: true, message: 'Server process not running.', status: await externalServerStatus() };
+    }
+
+    let busy: unknown;
+    try {
+      busy = (await httpJson(baseUrl, '/integration/mentra/status', 'GET', undefined, 2_000))?.busy;
+    } catch { /* Unknown activity requires explicit confirmation below. */ }
+    if (busy === true) {
+      return { ok: false, message: 'Stop the Iris conversation on the phone first.', status: await externalServerStatus() };
+    }
+    if (busy !== false && !confirmUnknown) {
+      return { ok: false, confirmationRequired: true,
+        message: 'Iris activity cannot be checked. Stopping may interrupt a conversation or lose pending work. Stop anyway?',
+        status: await externalServerStatus() };
     }
 
     await httpJson(baseUrl, '/admin/shutdown', 'POST', {
@@ -1397,6 +1412,9 @@ export async function externalServerStop(config?: MemuPluginConfig): Promise<{ o
     }
 
     const hi2 = await _externalServerHealthInfo(baseUrl);
+    if (hi2.unavailable) {
+      return { ok: false, message: 'Server stop could not be confirmed.', status: await externalServerStatus() };
+    }
     if (!hi2.healthy) {
       return { ok: true, message: 'Server stopped gracefully.', status: await externalServerStatus() };
     }
@@ -1415,7 +1433,7 @@ let _stStartedServer: { cfg: MemuPluginConfig; instanceId: string } | null = nul
 export async function startServerWithSillyTavern(): Promise<void> {
   try {
     const cfg = readPluginConfig();
-    if (!cfg.autoStartServer) return;
+    if (!cfg.autoStartWithSillyTavern) return;
     const started = await ensureLocalServer(cfg, { forceStart: true });
     if (!started.startedPid) return;
     const health = await _externalServerHealthInfo(started.baseUrl);
@@ -1435,11 +1453,6 @@ export async function stopServerWithSillyTavern(): Promise<void> {
     const baseUrl = getExternalServerBaseUrl(started.cfg);
     const health = await _externalServerHealthInfo(baseUrl);
     if (!health.healthy || health.serverInstanceId !== started.instanceId) return;
-    const iris = await httpJson(baseUrl, '/integration/mentra/status', 'GET', undefined, 2_000);
-    if (iris?.busy !== false) {
-      console.warn('[memu] Leaving MCP running: Iris is active or its activity is unknown.');
-      return;
-    }
     const result = await externalServerStop(started.cfg);
     if (!result.ok) console.warn('[memu] ST automatic shutdown was not confirmed:', result.message);
   } catch (error) {
@@ -1456,8 +1469,8 @@ export function registerServerControl(router: Router): void {
     return res.json(await externalServerStart());
   });
 
-  router.post('/server/stop', async (_req: Request, res: Response) => {
-    return res.json(await externalServerStop());
+  router.post('/server/stop', async (req: Request, res: Response) => {
+    return res.json(await externalServerStop(undefined, req.body?.confirm_unknown === true));
   });
 }
 

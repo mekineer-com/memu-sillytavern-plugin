@@ -23825,7 +23825,7 @@ function warnOnce(key, msg, ttlMs = 30000) {
 }
 const CONFIG_FILENAME = "memu-plugin.config.json";
 const DEFAULT_CONFIG = {
-    autoStartServer: false,
+    autoStartWithSillyTavern: false,
     version: 4,
     // External memU server folder (mcp-memu-server). In local mode we derive:
     //   baseUrl: http://127.0.0.1:8099  (or env MEMU_SERVER_URL)
@@ -23916,7 +23916,7 @@ function sanitizeIncomingConfig(obj) {
     // External server settings (local mode): only serverPath is user-configurable.
     const serverPathRaw = String(cfg.serverPath || '').trim();
     cfg.serverPath = serverPathRaw || DEFAULT_CONFIG.serverPath;
-    cfg.autoStartServer = cfg.autoStartServer === true;
+    cfg.autoStartWithSillyTavern = cfg.autoStartWithSillyTavern === true;
     cfg.updatedAt = new Date().toISOString();
     return cfg;
 }
@@ -24425,9 +24425,9 @@ async function listModelsForProfile(profileId, opts) {
     MODEL_CACHE.set(cacheKey, { ts: now, value: result });
     return result;
 }
-async function listModelsForProfileUncached(profileId, kind, supplied) {
+async function listModelsForProfileUncached(profileId, kind) {
     try {
-        const cred = supplied || resolveProfileCredentials(profileId);
+        const cred = resolveProfileCredentials(profileId);
         if (!cred)
             return { ok: false, models: [], message: 'Profile not found.' };
         if (!cred.ok)
@@ -24685,8 +24685,7 @@ async function proxyModelMappings(req, res) {
             if (body.mental_health_query !== undefined) {
                 if (typeof body.mental_health_query !== 'boolean')
                     throw Object.assign(new Error('mental_health_query must be boolean'), { status: 400 });
-                const current = await httpJson(srv.baseUrl, '/config', 'GET');
-                patch.retrieve = { ...current.config.retrieve, mental_health_query: body.mental_health_query };
+                patch.retrieve = { mental_health_query: body.mental_health_query };
             }
             for (const [group, roles] of Object.entries({ reply_models: ['srmm', 'other_apps'], step_models: ['preprocess', 'memory_extract', 'category_update', 'reflection', 'consolidation'] })) {
                 if (body[group] === undefined)
@@ -24950,16 +24949,20 @@ async function _externalServerHealthInfo(baseUrl) {
     try {
         const f = globalThis.fetch;
         if (!f)
-            return { healthy: false };
+            return { healthy: false, unavailable: true };
         const r = await f(baseUrl + '/health', { signal: AbortSignal.timeout(5000) });
         if (!r || !r.ok)
-            return { healthy: false };
+            return { healthy: false, unavailable: true };
         const txt = await r.text();
         let parsed = null;
         try {
             parsed = txt ? JSON.parse(txt) : null;
         }
-        catch { /* ignore */ }
+        catch {
+            return { healthy: false, unavailable: true };
+        }
+        if (!parsed || typeof parsed !== 'object')
+            return { healthy: false, unavailable: true };
         const serverInstanceId = parsed && typeof parsed.serverInstanceId === 'string' ? parsed.serverInstanceId : null;
         const ephemeralDb = parsed && typeof parsed.ephemeralDb === 'boolean' ? parsed.ephemeralDb : null;
         const shutdownRaw = parsed && typeof parsed.shutdown === 'object' ? parsed.shutdown : null;
@@ -24978,8 +24981,8 @@ async function _externalServerHealthInfo(baseUrl) {
         _externalServerEphemeralDb = ephemeralDb;
         return { healthy: true, serverInstanceId, ephemeralDb, shutdown };
     }
-    catch {
-        return { healthy: false };
+    catch (error) {
+        return { healthy: false, unavailable: (error?.cause?.code || error?.code) !== 'ECONNREFUSED' };
     }
 }
 async function externalServerStatus() {
@@ -24991,10 +24994,9 @@ async function externalServerStatus() {
         const logPath = _getExternalLogFile(cfg);
         const logTail = _readLogTail(logPath, 25);
         return {
-            ok: true,
+            ok: !healthInfo.unavailable,
             running: healthy,
             healthy,
-            managedByLauncher: process.env.MEMU_SERVER_MANAGED === 'launcher',
             pid: null,
             baseUrl,
             logPath,
@@ -25005,7 +25007,7 @@ async function externalServerStatus() {
         };
     }
     catch (e) {
-        return { ok: false, running: false, healthy: false, managedByLauncher: process.env.MEMU_SERVER_MANAGED === 'launcher', pid: null };
+        return { ok: false, running: false, healthy: false, pid: null };
     }
 }
 async function externalServerPingInfo() {
@@ -25048,13 +25050,29 @@ async function externalServerStart() {
         return { ok: false, message: msg, status: await externalServerStatus() };
     }
 }
-async function externalServerStop(config) {
+async function externalServerStop(config, confirmUnknown = false) {
     try {
         const cfg = config || readPluginConfig();
         const baseUrl = getExternalServerBaseUrl(cfg);
         const healthBefore = await _externalServerHealthInfo(baseUrl);
+        if (healthBefore.unavailable) {
+            return { ok: false, message: 'memU Server status is unavailable.', status: await externalServerStatus() };
+        }
         if (!healthBefore.healthy) {
             return { ok: true, message: 'Server process not running.', status: await externalServerStatus() };
+        }
+        let busy;
+        try {
+            busy = (await httpJson(baseUrl, '/integration/mentra/status', 'GET', undefined, 2000))?.busy;
+        }
+        catch { /* Unknown activity requires explicit confirmation below. */ }
+        if (busy === true) {
+            return { ok: false, message: 'Stop the Iris conversation on the phone first.', status: await externalServerStatus() };
+        }
+        if (busy !== false && !confirmUnknown) {
+            return { ok: false, confirmationRequired: true,
+                message: 'Iris activity cannot be checked. Stopping may interrupt a conversation or lose pending work. Stop anyway?',
+                status: await externalServerStatus() };
         }
         await httpJson(baseUrl, '/admin/shutdown', 'POST', {
             requested_by: 'sillytavern-memu-plugin',
@@ -25075,6 +25093,9 @@ async function externalServerStop(config) {
             await new Promise((r) => setTimeout(r, sawDraining ? 250 : 150));
         }
         const hi2 = await _externalServerHealthInfo(baseUrl);
+        if (hi2.unavailable) {
+            return { ok: false, message: 'Server stop could not be confirmed.', status: await externalServerStatus() };
+        }
         if (!hi2.healthy) {
             return { ok: true, message: 'Server stopped gracefully.', status: await externalServerStatus() };
         }
@@ -25092,7 +25113,7 @@ let _stStartedServer = null;
 async function startServerWithSillyTavern() {
     try {
         const cfg = readPluginConfig();
-        if (!cfg.autoStartServer)
+        if (!cfg.autoStartWithSillyTavern)
             return;
         const started = await ensureLocalServer(cfg, { forceStart: true });
         if (!started.startedPid)
@@ -25116,11 +25137,6 @@ async function stopServerWithSillyTavern() {
         const health = await _externalServerHealthInfo(baseUrl);
         if (!health.healthy || health.serverInstanceId !== started.instanceId)
             return;
-        const iris = await httpJson(baseUrl, '/integration/mentra/status', 'GET', undefined, 2000);
-        if (iris?.busy !== false) {
-            console.warn('[memu] Leaving MCP running: Iris is active or its activity is unknown.');
-            return;
-        }
         const result = await externalServerStop(started.cfg);
         if (!result.ok)
             console.warn('[memu] ST automatic shutdown was not confirmed:', result.message);
@@ -25136,8 +25152,8 @@ function registerServerControl(router) {
     router.post('/server/start', async (_req, res) => {
         return res.json(await externalServerStart());
     });
-    router.post('/server/stop', async (_req, res) => {
-        return res.json(await externalServerStop());
+    router.post('/server/stop', async (req, res) => {
+        return res.json(await externalServerStop(undefined, req.body?.confirm_unknown === true));
     });
 }
 async function httpJson(baseUrl, urlPath, method, body, timeoutMs = 600000) {

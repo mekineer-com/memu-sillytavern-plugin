@@ -4,7 +4,7 @@ interface MemuPluginConfig {
     version: number;
     updatedAt: string;
     serverPath?: string;
-    autoStartServer?: boolean;
+    autoStartWithSillyTavern?: boolean;
     embeddingModelSelected?: string;
     embeddingModelManual?: string;
     embeddingBatchSize?: number;
@@ -51,7 +51,6 @@ export declare function externalServerStatus(): Promise<{
     ok: boolean;
     running: boolean;
     healthy: boolean;
-    managedByLauncher: boolean;
     pid?: number | null;
     baseUrl?: string;
     logPath?: string | null;
@@ -71,8 +70,9 @@ export declare function externalServerStart(): Promise<{
     message?: string;
     status?: any;
 }>;
-export declare function externalServerStop(config?: MemuPluginConfig): Promise<{
+export declare function externalServerStop(config?: MemuPluginConfig, confirmUnknown?: boolean): Promise<{
     ok: boolean;
+    confirmationRequired?: boolean;
     message?: string;
     status?: any;
 }>;
