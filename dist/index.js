@@ -24893,25 +24893,15 @@ async function waitForServerHealthy(baseUrl) {
         await new Promise((r) => setTimeout(r, 200));
     }
 }
-async function isServerHealthy(baseUrl) {
-    try {
-        const f = globalThis.fetch;
-        if (!f)
-            return false;
-        const r = await f(baseUrl + '/health', { signal: AbortSignal.timeout(5000) });
-        return !!(r && r.ok);
-    }
-    catch {
-        return false;
-    }
-}
 async function ensureLocalServer(cfg, opts = {}) {
     // External server (mcp-memu-server). No Python probing required here.
     const baseUrl = getExternalServerBaseUrl(cfg);
     const shouldStartIfDown = opts.forceStart === true;
     let startedPid = null;
-    const okNow = await isServerHealthy(baseUrl);
-    if (!okNow) {
+    const healthNow = await _externalServerHealthInfo(baseUrl);
+    if (healthNow.unavailable)
+        throw new Error('memU Server status is unavailable.');
+    if (!healthNow.healthy) {
         if (shouldStartIfDown) {
             // Only explicit Start or ST's optional startup hook may launch the server.
             const runPy = getExternalServerRunPy(cfg);
@@ -24925,7 +24915,10 @@ async function ensureLocalServer(cfg, opts = {}) {
             }
             await waitForServerHealthy(baseUrl);
         }
-        if (!(await isServerHealthy(baseUrl))) {
+        const healthAfter = await _externalServerHealthInfo(baseUrl);
+        if (healthAfter.unavailable)
+            throw new Error('memU Server status is unavailable.');
+        if (!healthAfter.healthy) {
             if (shouldStartIfDown) {
                 throw new Error("mcp-memu-server did not become healthy");
             }

@@ -63,7 +63,6 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
         const lifecycle = {
           process: { env: managed ? { MEMU_SERVER_MANAGED: 'launcher' } : {} }, URL,
           getExternalServerBaseUrl: () => 'http://fictional.invalid:8099',
-          isServerHealthy: async () => healthy,
           getExternalServerRunPy: () => '/fictional/server/run.py',
           fs: { existsSync: () => true }, getExternalServerPython: () => '/fictional/python',
           _externalSpawnCooldownUntilUnixMs: 0,
@@ -91,6 +90,9 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
         healthy = true;
         await lifecycle.ensureLocalServer(cfg, { forceStart });
         assert.equal(spawns, shouldStart ? 1 : 0);
+        lifecycle._externalServerHealthInfo = async () => ({ healthy: false, unavailable: true });
+        await assert.rejects(lifecycle.ensureLocalServer(cfg, { forceStart }), /status is unavailable/);
+        assert.equal(spawns, shouldStart ? 1 : 0, 'Unknown health must not spawn or claim a server');
       }
     }
   }
@@ -151,9 +153,12 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
     _getExternalLogFile: () => null, _readLogTail: () => [],
     fetch: async () => { throw new Error('Fictional health timeout'); },
   };
-  vm.runInNewContext(ts.transpileModule(slice('async function _externalServerHealthInfo(', 'export async function externalServerPingInfo('),
+  vm.runInNewContext(ts.transpileModule(slice('async function ensureLocalServer(', 'type ExternalServerShutdownInfo')
+    + slice('async function _externalServerHealthInfo(', 'export async function externalServerPingInfo('),
     { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, healthEnv);
   assert.equal((await healthEnv.exports.externalServerStatus()).ok, false, 'A timeout is unknown, not stopped');
+  await assert.rejects(healthEnv.ensureLocalServer({}, { forceStart: true }), /status is unavailable/,
+    'A real health-probe failure must refuse Start before attempting to spawn');
   healthEnv.fetch = async () => { throw Object.assign(new Error('Refused'), { cause: { code: 'ECONNREFUSED' } }); };
   const offline = await healthEnv.exports.externalServerStatus();
   assert.equal(offline.ok, true); assert.equal(offline.running, false);

@@ -1194,17 +1194,6 @@ async function waitForServerHealthy(baseUrl: string): Promise<void> {
   }
 }
 
-async function isServerHealthy(baseUrl: string): Promise<boolean> {
-  try {
-    const f: any = (globalThis as any).fetch;
-    if (!f) return false;
-    const r = await f(baseUrl + '/health', { signal: AbortSignal.timeout(5_000) });
-    return !!(r && r.ok);
-  } catch {
-    return false;
-  }
-}
-
 async function ensureLocalServer(
   cfg: MemuPluginConfig,
   opts: { forceStart?: boolean } = {},
@@ -1213,9 +1202,10 @@ async function ensureLocalServer(
   const baseUrl = getExternalServerBaseUrl(cfg);
   const shouldStartIfDown = opts.forceStart === true;
   let startedPid: number | null = null;
-  const okNow = await isServerHealthy(baseUrl);
+  const healthNow = await _externalServerHealthInfo(baseUrl);
+  if (healthNow.unavailable) throw new Error('memU Server status is unavailable.');
 
-  if (!okNow) {
+  if (!healthNow.healthy) {
     if (shouldStartIfDown) {
       // Only explicit Start or ST's optional startup hook may launch the server.
       const runPy = getExternalServerRunPy(cfg);
@@ -1229,7 +1219,9 @@ async function ensureLocalServer(
       }
       await waitForServerHealthy(baseUrl);
     }
-    if (!(await isServerHealthy(baseUrl))) {
+    const healthAfter = await _externalServerHealthInfo(baseUrl);
+    if (healthAfter.unavailable) throw new Error('memU Server status is unavailable.');
+    if (!healthAfter.healthy) {
       if (shouldStartIfDown) {
         throw new Error("mcp-memu-server did not become healthy");
       }
