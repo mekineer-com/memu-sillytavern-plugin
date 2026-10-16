@@ -54,6 +54,42 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   compilerOptions: { module: ts.ModuleKind.CommonJS },
 }).outputText, soulContext);
 (async () => {
+  for (const managed of [false, true]) {
+    for (const autoStartServer of [false, true]) {
+      for (const forceStart of [false, true]) {
+        let healthy = false, spawns = 0;
+        const lifecycle = {
+          process: { env: managed ? { MEMU_SERVER_MANAGED: 'launcher' } : {} }, URL,
+          getExternalServerBaseUrl: () => 'http://fictional.invalid:8099',
+          isServerHealthy: async () => healthy,
+          getExternalServerRunPy: () => '/fictional/server/run.py',
+          fs: { existsSync: () => true }, getExternalServerPython: () => '/fictional/python',
+          _externalSpawnCooldownUntilUnixMs: 0,
+          spawnExternalServer: () => { spawns++; healthy = true; }, waitForServerHealthy: async () => {},
+        };
+        vm.runInNewContext(ts.transpileModule(slice('async function ensureLocalServer(', 'type ExternalServerShutdownInfo'), {
+          compilerOptions: { module: ts.ModuleKind.CommonJS },
+        }).outputText, lifecycle);
+        const cfg = { autoStartServer, serverPath: '/fictional/saved/server' };
+        const shouldStart = !managed && (autoStartServer || forceStart);
+        if (shouldStart) await lifecycle.ensureLocalServer(cfg, { forceStart });
+        else await assert.rejects(lifecycle.ensureLocalServer(cfg, { forceStart }), managed ? /Start memU Server in OpenAlma Launcher/ : /autoStartServer=false/);
+        assert.equal(spawns, shouldStart ? 1 : 0);
+        assert.equal(cfg.autoStartServer, autoStartServer);
+        healthy = true;
+        await lifecycle.ensureLocalServer(cfg, { forceStart });
+        assert.equal(spawns, shouldStart ? 1 : 0);
+        if (managed) {
+          healthy = false;
+          await assert.rejects(lifecycle.ensureLocalServer(cfg, { forceStart }), /Start memU Server in OpenAlma Launcher/);
+          healthy = true;
+          await lifecycle.ensureLocalServer(cfg, { forceStart });
+          assert.equal(spawns, 0);
+        }
+      }
+    }
+  }
+  console.log('Managed requests never spawn; standalone auto-start and explicit Start remain intact.');
   const routes = [];
   soulContext.exports.registerSouls({ get: route => routes.push(route), post: route => routes.push(route) });
   assert(routes.includes('/souls/:soulId'));

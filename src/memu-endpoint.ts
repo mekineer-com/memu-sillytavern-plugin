@@ -1216,7 +1216,8 @@ async function ensureLocalServer(
   // External server (mcp-memu-server). No Python probing required here.
   const baseUrl = getExternalServerBaseUrl(cfg);
   const autoStartServer = cfg.autoStartServer !== false;
-  const shouldStartIfDown = autoStartServer || opts.forceStart === true;
+  const launcherManaged = process.env.MEMU_SERVER_MANAGED === 'launcher';
+  const shouldStartIfDown = !launcherManaged && (autoStartServer || opts.forceStart === true);
   const okNow = await isServerHealthy(baseUrl);
 
   if (!okNow) {
@@ -1234,6 +1235,7 @@ async function ensureLocalServer(
       await waitForServerHealthy(baseUrl);
     }
     if (!(await isServerHealthy(baseUrl))) {
+      if (launcherManaged) throw new Error("Start memU Server in OpenAlma Launcher.");
       if (shouldStartIfDown) {
         throw new Error("mcp-memu-server did not become healthy");
       }

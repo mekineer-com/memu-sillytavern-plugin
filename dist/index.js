@@ -23825,10 +23825,7 @@ const DEFAULT_CONFIG = {
     // External memU server folder (mcp-memu-server). In local mode we derive:
     //   baseUrl: http://127.0.0.1:8099  (or env MEMU_SERVER_URL)
     //   command: <serverPath>/run.py (spawned via python, no shell)
-    serverPath: (() => {
-        const home = String(process.env.HOME || process.env.USERPROFILE || '').trim();
-        return home ? path_1.default.join(home, 'apps', 'mcp-memu-server') : undefined;
-    })(),
+    serverPath: String(process.env.MEMU_SERVER_PATH || '').trim() || undefined,
     autoStartServer: true,
     embeddingBatchSize: 25,
     updatedAt: new Date().toISOString(),
@@ -23914,9 +23911,7 @@ function sanitizeIncomingConfig(obj) {
         Number.isFinite(embeddingBatchSize) && embeddingBatchSize > 0 ? Math.floor(embeddingBatchSize) : 25;
     // External server settings (local mode): only serverPath is user-configurable.
     const serverPathRaw = String(cfg.serverPath || '').trim();
-    const home2 = String(process.env.HOME || process.env.USERPROFILE || '').trim();
-    const defaultPath = home2 ? path_1.default.join(home2, 'apps', 'mcp-memu-server') : '';
-    cfg.serverPath = (serverPathRaw || defaultPath || '').trim() || undefined;
+    cfg.serverPath = serverPathRaw || DEFAULT_CONFIG.serverPath;
     cfg.autoStartServer = (cfg.autoStartServer !== false);
     cfg.updatedAt = new Date().toISOString();
     return cfg;
@@ -24916,7 +24911,8 @@ async function ensureLocalServer(cfg, opts = {}) {
     // External server (mcp-memu-server). No Python probing required here.
     const baseUrl = getExternalServerBaseUrl(cfg);
     const autoStartServer = cfg.autoStartServer !== false;
-    const shouldStartIfDown = autoStartServer || opts.forceStart === true;
+    const launcherManaged = process.env.MEMU_SERVER_MANAGED === 'launcher';
+    const shouldStartIfDown = !launcherManaged && (autoStartServer || opts.forceStart === true);
     const okNow = await isServerHealthy(baseUrl);
     if (!okNow) {
         if (shouldStartIfDown) {
@@ -24933,6 +24929,8 @@ async function ensureLocalServer(cfg, opts = {}) {
             await waitForServerHealthy(baseUrl);
         }
         if (!(await isServerHealthy(baseUrl))) {
+            if (launcherManaged)
+                throw new Error("Start memU Server in OpenAlma Launcher.");
             if (shouldStartIfDown) {
                 throw new Error("mcp-memu-server did not become healthy");
             }
