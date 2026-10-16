@@ -51,6 +51,7 @@ export declare function externalServerStatus(): Promise<{
     ok: boolean;
     running: boolean;
     healthy: boolean;
+    managedByLauncher: boolean;
     pid?: number | null;
     baseUrl?: string;
     logPath?: string | null;

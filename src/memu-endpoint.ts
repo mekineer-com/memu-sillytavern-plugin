@@ -1304,7 +1304,7 @@ async function _externalServerHealthInfo(baseUrl: string): Promise<{ healthy: bo
   }
 }
 
-export async function externalServerStatus(): Promise<{ ok: boolean; running: boolean; healthy: boolean; pid?: number | null; baseUrl?: string; logPath?: string | null; logTail?: string[]; serverInstanceId?: string | null; ephemeralDb?: boolean | null; shutdown?: ExternalServerShutdownInfo | null }> {
+export async function externalServerStatus(): Promise<{ ok: boolean; running: boolean; healthy: boolean; managedByLauncher: boolean; pid?: number | null; baseUrl?: string; logPath?: string | null; logTail?: string[]; serverInstanceId?: string | null; ephemeralDb?: boolean | null; shutdown?: ExternalServerShutdownInfo | null }> {
   try {
     const cfg = readPluginConfig();
 
@@ -1318,6 +1318,7 @@ export async function externalServerStatus(): Promise<{ ok: boolean; running: bo
       ok: true,
       running: healthy,
       healthy,
+      managedByLauncher: process.env.MEMU_SERVER_MANAGED === 'launcher',
       pid: null,
       baseUrl,
       logPath,
@@ -1327,7 +1328,7 @@ export async function externalServerStatus(): Promise<{ ok: boolean; running: bo
       shutdown: healthInfo.shutdown || null,
     };
   } catch (e: any) {
-    return { ok: false, running: false, healthy: false, pid: null };
+    return { ok: false, running: false, healthy: false, managedByLauncher: process.env.MEMU_SERVER_MANAGED === 'launcher', pid: null };
   }
 }
 

@@ -66,11 +66,21 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
           fs: { existsSync: () => true }, getExternalServerPython: () => '/fictional/python',
           _externalSpawnCooldownUntilUnixMs: 0,
           spawnExternalServer: () => { spawns++; healthy = true; }, waitForServerHealthy: async () => {},
+          _externalServerHealthInfo: async () => ({ healthy }),
+          _getExternalLogFile: () => null, _readLogTail: () => [],
+          _externalServerInstanceId: null, _externalServerEphemeralDb: null,
+          exports: {},
         };
-        vm.runInNewContext(ts.transpileModule(slice('async function ensureLocalServer(', 'type ExternalServerShutdownInfo'), {
+        vm.runInNewContext(ts.transpileModule(slice('async function ensureLocalServer(', 'type ExternalServerShutdownInfo')
+          + slice('export async function externalServerStatus(', 'export async function externalServerPingInfo('), {
           compilerOptions: { module: ts.ModuleKind.CommonJS },
         }).outputText, lifecycle);
         const cfg = { autoStartServer, serverPath: '/fictional/saved/server' };
+        lifecycle.readPluginConfig = () => cfg;
+        assert.equal((await lifecycle.exports.externalServerStatus()).managedByLauncher, managed);
+        lifecycle.readPluginConfig = () => { throw new Error('Fictional config failure'); };
+        assert.equal((await lifecycle.exports.externalServerStatus()).managedByLauncher, managed);
+        lifecycle.readPluginConfig = () => cfg;
         const shouldStart = !managed && (autoStartServer || forceStart);
         if (shouldStart) await lifecycle.ensureLocalServer(cfg, { forceStart });
         else await assert.rejects(lifecycle.ensureLocalServer(cfg, { forceStart }), managed ? /Start memU Server in OpenAlma Launcher/ : /autoStartServer=false/);

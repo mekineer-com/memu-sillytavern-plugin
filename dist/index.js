@@ -24998,6 +24998,7 @@ async function externalServerStatus() {
             ok: true,
             running: healthy,
             healthy,
+            managedByLauncher: process.env.MEMU_SERVER_MANAGED === 'launcher',
             pid: null,
             baseUrl,
             logPath,
@@ -25008,7 +25009,7 @@ async function externalServerStatus() {
         };
     }
     catch (e) {
-        return { ok: false, running: false, healthy: false, pid: null };
+        return { ok: false, running: false, healthy: false, managedByLauncher: process.env.MEMU_SERVER_MANAGED === 'launcher', pid: null };
     }
 }
 async function externalServerPingInfo() {
