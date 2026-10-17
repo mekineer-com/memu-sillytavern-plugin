@@ -108,8 +108,11 @@ never posts remembered choices to server config. `POST /modelMappings` patches
 only changed rows: `{model}` writes a model name; saved-profile/native choices
 resolve credentials backend-side; `null` removes the step and its capacity.
 `base_model` replaces the shared reply connection and clears stale optional fields.
-Projection-only `profile_id` hints require an exact backend connection/credential
-match; they are never saved in server config. Unmatched objects stay hand-configured.
+Projection-only profile hints match provider, URL, credentials and model, not
+derived capacities/limits; they are never saved in server config. Optional
+key-free native context returns a separate `native_match` result, including
+when no saved profile exists. Neither that context nor its comparison result
+is persisted. Unmatched loaded objects remain config-authoritative.
 
 Catalog reads never discover provider models or write mappings. Only resolving a
 chosen connection without native/profile capacity fetches provider metadata,

@@ -24642,7 +24642,7 @@ async function resolveMappingSelection(selection, context, native = false, disco
         ...(capacity ? { context_window_tokens: capacity } : {}),
         ...(native && Number.isInteger(selection.max_tokens) && selection.max_tokens > 0 ? { max_tokens: selection.max_tokens } : {}) };
 }
-async function modelMappingProjection(config, context) {
+async function modelMappingProjection(config, context, native) {
     const llm = config.llm || {};
     const providers = mappingCatalog(context);
     // /config masks keys. Compare locally so a same-URL/model profile with a different key is never guessed.
@@ -24654,18 +24654,31 @@ async function modelMappingProjection(config, context) {
                 profile_id: profile.profile_id, provider: profile.provider, model: profile.models[0].model
             }, context, false, false) });
     }
-    const matchedProfile = (connection) => connections.find(candidate => connection
-        && ['provider', 'base_url', 'api_key', 'chat_model', 'context_window_tokens', 'max_tokens', 'temperature', 'endpoint_overrides'].every(key => JSON.stringify(connection[key] ?? (key === 'endpoint_overrides' ? {} : null))
-            === JSON.stringify(candidate.connection[key] ?? (key === 'endpoint_overrides' ? {} : null))))?.profile_id;
+    let nativeConnection;
+    if (native) {
+        try {
+            nativeConnection = await resolveMappingSelection(mappingSelection(native), context, true, false);
+        }
+        catch (error) {
+            if (error.status !== 400)
+                throw error;
+        }
+    }
+    const sameConnection = (a, b) => !!a && !!b
+        && ['provider', 'base_url', 'api_key', 'chat_model'].every(key => a[key] === b[key]);
+    const hints = (connection) => {
+        const ids = connections.filter(candidate => sameConnection(connection, candidate.connection)).map(candidate => candidate.profile_id);
+        return { profile_id: ids[0], profile_ids: ids, native_match: sameConnection(connection, nativeConnection) };
+    };
     const withoutKeys = (value) => Array.isArray(value) ? value.map(withoutKeys)
         : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value)
             .filter(([key]) => key !== 'api_key').map(([key, item]) => [key, withoutKeys(item)])) : value;
     const base = withoutKeys(Object.fromEntries(['provider', 'base_url', 'chat_model', 'context_window_tokens', 'max_tokens', 'endpoint_overrides', 'temperature']
         .filter(key => llm[key] !== undefined).map(key => [key, llm[key]])));
-    base.profile_id = matchedProfile(actual);
+    Object.assign(base, hints(actual));
     return { claude_code: config.claude_code === true,
         step_models: Object.fromEntries(Object.entries(llm.step_models || {}).map(([step, value]) => [step,
-            typeof value === 'string' ? value : { ...withoutKeys(value), profile_id: matchedProfile(actual?.step_models?.[step]) }])),
+            typeof value === 'string' ? value : { ...withoutKeys(value), ...hints(actual?.step_models?.[step]) }])),
         base_model: base, providers };
 }
 function mappingSelection(selection) {
@@ -24695,6 +24708,7 @@ async function resolveSrmm(req, choice) {
 async function proxyModelMappings(req, res) {
     try {
         const context = mappingContext(req);
+        const native = req.method === 'GET' ? (typeof req.query?.native === 'string' ? JSON.parse(req.query.native) : undefined) : req.body?.native;
         const srv = await ensureLocalServer(readPluginConfig());
         if (req.method === 'GET') {
             await httpJson(srv.baseUrl, '/reload', 'POST', {});
@@ -24757,7 +24771,7 @@ async function proxyModelMappings(req, res) {
                 await httpJson(srv.baseUrl, '/config', 'POST', patch);
         }
         const result = await httpJson(srv.baseUrl, '/config', 'GET');
-        res.json(await modelMappingProjection(result.config, context));
+        res.json(await modelMappingProjection(result.config, context, native));
     }
     catch (error) {
         res.status(Number.isInteger(error.status) ? error.status : 503).json({ error: error.detail || error.message || String(error) });
