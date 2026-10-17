@@ -20,7 +20,7 @@ const context = {
   _externalServerInstanceId: null, _externalServerEphemeralDb: null,
   fetch: async () => ({ ok: false, status: 409, text: async () => JSON.stringify({ detail }) }),
   readPluginConfig: () => ({}), ensureLocalServer: async () => ({ baseUrl: 'http://test.invalid' }),
-  buildMemuPayloadForLocal: () => ({}),
+  buildMemuPayloadForLocal: () => ({}), resolveSrmm: async () => 'config',
   sanitizeIncomingConfig: value => value,
   makeTaskId: () => 'fictional-observation',
 };
@@ -56,7 +56,12 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
   const memoryBuilder = context.buildMemuPayloadForLocal;
   context.buildMemuPayloadForLocal = () => ({});
   response = { ok: true };
+  for (const enabled of [false, true]) {
+    await context.exports.proxyConversationRetrieve({ body: { userId: 'TestOwner', soulId: 'TestSoul', conversationId: 'test-chat', query: 'Draft', mentalHealthAddon: enabled } }, res);
+    assert.equal(wire.mental_health_addon, enabled, 'Per-Soul choice must override the shared default in both directions');
+  }
   await context.exports.proxyConversationRetrieve({ body: { userId: 'TestOwner', soulId: 'TestSoul', conversationId: 'test-chat', query: 'Draft' } }, res);
+  assert.equal(Object.hasOwn(wire, 'mental_health_addon'), false);
   assert.equal(Object.hasOwn(wire, 'mental_health_addon'), false, 'ST retrieval must inherit the server setting');
   context.buildMemuPayloadForLocal = memoryBuilder;
   for (const status of ['accepted', 'started', 'waiting_for_import', 'deferred', 'nothing_to_memorize', 'published', 'coalesced']) {

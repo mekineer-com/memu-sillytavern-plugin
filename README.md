@@ -99,3 +99,27 @@ AGPLv3
 
 ### memU v1.4+ only
 This release targets `memU` >= `1.4.0` via `mcp-memu-server`.
+
+### Model Mapping
+
+`GET /modelMappings` reloads ordinary server settings and returns key-free
+`base_model`, `step_models` and saved ST connection summaries. Opening settings
+never posts remembered choices to server config. `POST /modelMappings` patches
+only changed rows: `{model}` writes a model name; saved-profile/native choices
+resolve credentials backend-side; `null` removes the step and its capacity.
+`base_model` replaces the shared reply connection and clears stale optional fields.
+Projection-only `profile_id` hints require an exact backend connection/credential
+match; they are never saved in server config. Unmatched objects stay hand-configured.
+
+Catalog reads never discover provider models or write mappings. Only resolving a
+chosen connection without native/profile capacity fetches provider metadata,
+using the authenticated user's credentials and the existing five-minute cache.
+Only that model's reported capacity is used; unavailable metadata leaves it unset,
+never carried over from the previous model. Native capacity takes precedence;
+reads leave hand-edited capacities untouched. Known default hosted API endpoints require
+credentials before any config write; keyless custom/local connections remain valid.
+
+Turns and Narrative Suggestions carry a key-free ST choice under `srmm`; the
+plugin resolves it to top-level `srmm: "config"` or a complete API connection
+for MCP. The shared memory/retrieval builder never adds SRMM. Missing saved SRMM
+profiles use the live ST selection; unusable existing profiles return an error.

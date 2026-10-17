@@ -23903,6 +23903,7 @@ function sanitizeIncomingConfig(obj) {
         ...(obj && typeof obj === "object" ? obj : {}),
     };
     cfg.version = 4;
+    // Transition cleanup expires 2027-01-17: remove this old-mapping upgrade handling.
     for (const key of ['useServerSettings', 'useClaudeCode', 'defaultProfileId', 'stepProfileId'])
         delete cfg[key];
     // Normalize/derive embedding model fields (dropdown overrides manual).
@@ -24425,9 +24426,9 @@ async function listModelsForProfile(profileId, opts) {
     MODEL_CACHE.set(cacheKey, { ts: now, value: result });
     return result;
 }
-async function listModelsForProfileUncached(profileId, kind) {
+async function listModelsForProfileUncached(profileId, kind, supplied) {
     try {
-        const cred = resolveProfileCredentials(profileId);
+        const cred = supplied || resolveProfileCredentials(profileId);
         if (!cred)
             return { ok: false, models: [], message: 'Profile not found.' };
         if (!cred.ok)
@@ -24445,10 +24446,10 @@ async function listModelsForProfileUncached(profileId, kind) {
         else {
             url = buildOpenAIModelsUrl(baseUrl);
         }
-        const json = await httpGetJson(url, {
+        const json = await httpGetJson(url, cred.key ? {
             Authorization: `Bearer ${cred.key}`,
             'x-api-key': cred.key,
-        });
+        } : {});
         let ids = [];
         if (json && Array.isArray(json.data)) {
             ids = json.data.map((x) => (x && typeof x.id === 'string' ? x.id : null)).filter(Boolean);
@@ -24556,14 +24557,6 @@ function buildMemuPayloadForLocal(cfg, userId, characterId, conversation, opts) 
 // ---------------------------------
 // Local MCP/HTTP server (FastAPI)
 // ---------------------------------
-function nativeModelFields() {
-    const constants = fs_1.default.readFileSync(path_1.default.join(getStRoot(), 'src/constants.js'), 'utf8');
-    const sources = constants.match(/CHAT_COMPLETION_SOURCES\s*=\s*\{([^}]+)\}/s)?.[1] || '';
-    const names = Object.fromEntries([...sources.matchAll(/(\w+)\s*:\s*'([^']+)'/g)].map(match => [match[1], match[2]]));
-    const getter = fs_1.default.readFileSync(path_1.default.join(getStRoot(), 'public/scripts/openai.js'), 'utf8');
-    return Object.fromEntries([...getter.matchAll(/case chat_completion_sources\.(\w+):\s*return settings\.(\w+)/g)]
-        .filter(match => names[match[1]]).map(match => [names[match[1]], match[2]]));
-}
 function mappingContext(req) {
     const directory = req.user?.directories?.root;
     if (typeof directory !== 'string' || !directory)
@@ -24572,23 +24565,6 @@ function mappingContext(req) {
     const secrets = readJsonIfExists(path_1.default.join(directory, 'secrets.json')) || {};
     const profiles = (settings.extension_settings?.connectionManager?.profiles || []).map((profile) => ({ ...profile, __st_user_dir: directory }));
     const oai = settings.oai_settings || {};
-    for (const [provider, field] of Object.entries(nativeModelFields())) {
-        const model = oai[field];
-        if (typeof model !== 'string' || !model)
-            continue;
-        const providerSecrets = Object.fromEntries(Object.entries(secrets).filter(([key]) => key === `api_key_${provider}` || (provider === 'mistralai' && key === 'api_key_mistral')));
-        if (!pickKeyForProvider(provider, providerSecrets) && !(provider === 'custom' && oai.custom_url)
-            && !(['openai', 'mistralai', 'deepseek', 'xai'].includes(provider) && oai.reverse_proxy))
-            continue;
-        profiles.push({ id: `native:cc:${provider}`, name: provider, mode: 'cc', api: provider, model,
-            'api-url': provider === 'custom' ? oai.custom_url : _stProviderUrls[provider], __st_user_dir: directory });
-    }
-    const textgen = settings.textgenerationwebui_settings || {};
-    for (const [provider, baseUrl] of Object.entries(textgen.server_urls || {})) {
-        const model = textgen[`${provider}_model`];
-        if (baseUrl && model)
-            profiles.push({ id: `native:tc:${provider}`, name: provider, mode: 'tc', api: provider, model, 'api-url': baseUrl, __st_user_dir: directory });
-    }
     return { profiles, secrets, directory, oai };
 }
 function mappingCredentials(profile, context, selection, native = false) {
@@ -24611,6 +24587,10 @@ function mappingCredentials(profile, context, selection, native = false) {
         throw Object.assign(new Error('Configured connection lacks URL'), { status: 400 });
     if (normalized.secretId && !key)
         throw Object.assign(new Error('Configured secret not found'), { status: 400 });
+    if (!key && !proxy && _stProviderUrls[provider]
+        && new URL(baseUrl).origin === new URL(_stProviderUrls[provider]).origin) {
+        throw Object.assign(new Error(`Missing api_key for profile '${normalized.name}' (${normalized.id}).`), { status: 400 });
+    }
     if (profile.mode === 'tc' && new URL(baseUrl).pathname === '/')
         baseUrl = baseUrl.replace(/\/$/, '') + '/v1';
     return { ok: true, provider, baseUrl, key: key || '', model: String(selection.model || normalized.model || '') };
@@ -24621,7 +24601,7 @@ function mappingCatalog(context) {
         const entry = { profile_id: profile.id, provider: normalized.provider, label: profile.name || normalized.provider,
             models: normalized.model ? [{ model: normalized.model }] : [], supported: false };
         try {
-            mappingCredentials(profile, context, { provider: normalized.provider });
+            entry.base_url = mappingCredentials(profile, context, { provider: normalized.provider }).baseUrl;
             if (normalized.model && Number.isInteger(profile.context_window_tokens) && profile.context_window_tokens > 0) {
                 entry.models[0].context_window_tokens = profile.context_window_tokens;
             }
@@ -24633,7 +24613,7 @@ function mappingCatalog(context) {
         return entry;
     });
 }
-async function resolveMappingSelection(selection, context, native = false) {
+async function resolveMappingSelection(selection, context, native = false, discover = true) {
     if (!selection || typeof selection.provider !== 'string' || typeof selection.model !== 'string' || !selection.model.trim()) {
         throw Object.assign(new Error('Provider and model are required'), { status: 400 });
     }
@@ -24646,25 +24626,71 @@ async function resolveMappingSelection(selection, context, native = false) {
         throw Object.assign(new Error('Configured ST connection not found'), { status: 400 });
     const credentials = mappingCredentials(native ? { ...profile, 'secret-id': undefined, secretId: undefined, api_key: undefined } : profile, context, selection, native);
     const catalog = mappingCatalog(context).find(p => p.profile_id === profile.id);
-    const capacity = catalog?.models.find((model) => model.model === selection.model)?.context_window_tokens
-        ?? (native && Number.isInteger(selection.context_window_tokens) && selection.context_window_tokens > 0 ? selection.context_window_tokens : undefined);
+    let capacity = (native && Number.isInteger(selection.context_window_tokens) && selection.context_window_tokens > 0 ? selection.context_window_tokens : undefined)
+        ?? catalog?.models.find((model) => model.model === selection.model)?.context_window_tokens;
+    if (!capacity) {
+        // Scope metadata to the actual connection/model, not a reusable profile id.
+        const cacheKey = JSON.stringify([context.directory, 'chat', credentials.provider, credentials.baseUrl, credentials.key, selection.model]);
+        const cached = MODEL_CACHE.get(cacheKey);
+        const listed = cached && Date.now() - cached.ts < MODEL_CACHE_TTL_MS ? cached.value
+            : discover ? await listModelsForProfileUncached(profile.id, 'chat', credentials) : null;
+        if (listed && listed !== cached?.value)
+            MODEL_CACHE.set(cacheKey, { ts: Date.now(), value: listed });
+        capacity = listed?.context_windows?.[selection.model];
+    }
     return { provider: 'openai', base_url: credentials.baseUrl, api_key: credentials.key, chat_model: selection.model,
         ...(capacity ? { context_window_tokens: capacity } : {}),
         ...(native && Number.isInteger(selection.max_tokens) && selection.max_tokens > 0 ? { max_tokens: selection.max_tokens } : {}) };
 }
-function modelMappingProjection(config, providers) {
+async function modelMappingProjection(config, context) {
     const llm = config.llm || {};
-    const selectors = (rows = {}) => Object.fromEntries(Object.entries(rows).map(([role, row]) => [role, { source: row.source, ...(row.selection ? { selection: row.selection } : {}) }]));
-    return { claude_code: config.claude_code === true, mental_health_query: config.retrieve?.mental_health_query === true,
-        reply_models: selectors(llm.reply_models), step_models: selectors(llm.step_models),
-        st_selected: llm.st_selected?.selection ? { selection: llm.st_selected.selection } : null,
-        base_model: { provider: llm.provider, model: llm.chat_model }, providers };
+    const providers = mappingCatalog(context);
+    // /config masks keys. Compare locally so a same-URL/model profile with a different key is never guessed.
+    const root = sanitizeIncomingConfig(readPluginConfig()).serverPath;
+    const actual = root ? _readExternalServerConfig(root)?.llm : undefined;
+    const connections = [];
+    for (const profile of providers.filter(profile => profile.supported && profile.models.length)) {
+        connections.push({ profile_id: profile.profile_id, connection: await resolveMappingSelection({
+                profile_id: profile.profile_id, provider: profile.provider, model: profile.models[0].model
+            }, context, false, false) });
+    }
+    const matchedProfile = (connection) => connections.find(candidate => connection
+        && ['provider', 'base_url', 'api_key', 'chat_model', 'context_window_tokens', 'max_tokens', 'temperature', 'endpoint_overrides'].every(key => JSON.stringify(connection[key] ?? (key === 'endpoint_overrides' ? {} : null))
+            === JSON.stringify(candidate.connection[key] ?? (key === 'endpoint_overrides' ? {} : null))))?.profile_id;
+    const withoutKeys = (value) => Array.isArray(value) ? value.map(withoutKeys)
+        : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value)
+            .filter(([key]) => key !== 'api_key').map(([key, item]) => [key, withoutKeys(item)])) : value;
+    const base = withoutKeys(Object.fromEntries(['provider', 'base_url', 'chat_model', 'context_window_tokens', 'max_tokens', 'endpoint_overrides', 'temperature']
+        .filter(key => llm[key] !== undefined).map(key => [key, llm[key]])));
+    base.profile_id = matchedProfile(actual);
+    return { claude_code: config.claude_code === true,
+        step_models: Object.fromEntries(Object.entries(llm.step_models || {}).map(([step, value]) => [step,
+            typeof value === 'string' ? value : { ...withoutKeys(value), profile_id: matchedProfile(actual?.step_models?.[step]) }])),
+        base_model: base, providers };
 }
 function mappingSelection(selection) {
     if (!selection || typeof selection !== 'object')
         throw Object.assign(new Error('Model selection required'), { status: 400 });
     return Object.fromEntries(['profile_id', 'provider', 'model', 'base_url', 'context_window_tokens', 'max_tokens']
         .filter(key => selection[key] !== undefined).map(key => [key, selection[key]]));
+}
+async function resolveSrmm(req, choice) {
+    if (choice?.source === 'config')
+        return 'config';
+    const context = mappingContext(req);
+    if (choice?.source === 'configured') {
+        const profile = context.profiles.find(profile => profile.id === choice.profile_id);
+        if (profile) {
+            const normalized = normalizeProfile(profile);
+            return resolveMappingSelection({ profile_id: profile.id, provider: normalized.provider, model: normalized.model }, context);
+        }
+    }
+    else if (choice?.source !== 'st_native') {
+        throw Object.assign(new Error('SRMM choice is required'), { status: 400 });
+    }
+    if (!choice.native)
+        throw Object.assign(new Error('SillyTavern has no selected model'), { status: 400 });
+    return resolveMappingSelection(mappingSelection(choice.native), context, true);
 }
 async function proxyModelMappings(req, res) {
     try {
@@ -24682,36 +24708,56 @@ async function proxyModelMappings(req, res) {
                     throw Object.assign(new Error('claude_code must be boolean'), { status: 400 });
                 patch.claude_code = body.claude_code;
             }
-            if (body.mental_health_query !== undefined) {
-                if (typeof body.mental_health_query !== 'boolean')
-                    throw Object.assign(new Error('mental_health_query must be boolean'), { status: 400 });
-                patch.retrieve = { mental_health_query: body.mental_health_query };
-            }
-            for (const [group, roles] of Object.entries({ reply_models: ['srmm', 'other_apps'], step_models: ['preprocess', 'memory_extract', 'category_update', 'reflection', 'consolidation'] })) {
-                if (body[group] === undefined)
-                    continue;
-                llm[group] = {};
-                for (const [role, row] of Object.entries(body[group])) {
-                    if (!roles.includes(role) || !row || !['config', 'st_native', 'configured', ...(group === 'step_models' ? ['srmm'] : [])].includes(row.source)) {
-                        throw Object.assign(new Error('Invalid model mapping selector'), { status: 400 });
+            const resolveRow = async (row) => {
+                if (row?.source === 'srmm') {
+                    const connection = await resolveSrmm(req, row.srmm);
+                    if (connection !== 'config')
+                        return connection;
+                    const root = sanitizeIncomingConfig(readPluginConfig()).serverPath;
+                    const llm = root ? _readExternalServerConfig(root)?.llm : undefined;
+                    if (!llm || typeof llm.api_key !== 'string')
+                        throw Object.assign(new Error('SRMM copy needs a configured server path and base API connection'), { status: 400 });
+                    return Object.fromEntries(['provider', 'base_url', 'api_key', 'chat_model', 'context_window_tokens', 'max_tokens', 'endpoint_overrides', 'temperature']
+                        .filter(key => llm[key] !== undefined && llm[key] !== null).map(key => [key, llm[key]]));
+                }
+                if (row?.source === 'configured' && !context.profiles.some(profile => profile.id === row.profile_id)) {
+                    throw Object.assign(new Error('Configured ST connection not found'), { status: 400 });
+                }
+                if (row?.source)
+                    return resolveSrmm(req, row);
+                return resolveMappingSelection(mappingSelection(row), context);
+            };
+            if (body.step_models !== undefined) {
+                llm.step_models = {};
+                llm.step_context_window_tokens = {};
+                for (const [step, row] of Object.entries(body.step_models)) {
+                    if (!['preprocess', 'memory_extract', 'category_update', 'reflection', 'consolidation'].includes(step)) {
+                        throw Object.assign(new Error('Invalid model mapping step'), { status: 400 });
                     }
-                    llm[group][role] = { source: row.source };
-                    if (row.source === 'configured') {
-                        llm[group][role].selection = mappingSelection(row.selection);
-                        llm[group][role].resolved = await resolveMappingSelection(llm[group][role].selection, context);
+                    llm.step_models[step] = row === null ? null
+                        : !row.profile_id && !row.source && typeof row.model === 'string' && row.model.trim() ? row.model
+                            : await resolveRow(row);
+                    if (llm.step_models[step] === 'config')
+                        llm.step_models[step] = null;
+                    llm.step_context_window_tokens[step] = null;
+                }
+            }
+            if (body.base_model !== undefined) {
+                const deleted = body.base_model?.source === 'configured' && !context.profiles.some(profile => profile.id === body.base_model.profile_id);
+                const connection = deleted ? 'config' : await resolveRow(body.base_model);
+                if (connection !== 'config') {
+                    for (const key of ['provider', 'base_url', 'api_key', 'chat_model', 'context_window_tokens', 'max_tokens', 'endpoint_overrides', 'temperature']) {
+                        llm[key] = connection[key] ?? (key === 'endpoint_overrides' ? {} : null);
                     }
                 }
             }
-            if (body.st_selected !== undefined) {
-                const selection = mappingSelection(body.st_selected?.selection);
-                llm.st_selected = { selection, resolved: await resolveMappingSelection(selection, context, true) };
-            }
             if (Object.keys(llm).length)
                 patch.llm = llm;
-            await httpJson(srv.baseUrl, '/config', 'POST', patch);
+            if (Object.keys(patch).length)
+                await httpJson(srv.baseUrl, '/config', 'POST', patch);
         }
         const result = await httpJson(srv.baseUrl, '/config', 'GET');
-        res.json(modelMappingProjection(result.config, mappingCatalog(context)));
+        res.json(await modelMappingProjection(result.config, context));
     }
     catch (error) {
         res.status(Number.isInteger(error.status) ? error.status : 503).json({ error: error.detail || error.message || String(error) });
@@ -25358,6 +25404,9 @@ async function proxyConversationRetrieve(req, res) {
         if (req.body?.soul_card) {
             payload.soul_card = req.body.soul_card;
         }
+        if (typeof req.body?.mentalHealthAddon === "boolean") {
+            payload.mental_health_addon = req.body.mentalHealthAddon;
+        }
         const resp = await httpJson(srv.baseUrl, `/conversation/${encodeURIComponent(conversationId)}/retrieve`, "POST", payload);
         res.json(resp);
     }
@@ -25395,6 +25444,7 @@ async function proxyConversationTurn(req, res) {
         });
         payload.user = { user_id: userId, soul_id: soulId };
         payload.message = message;
+        payload.srmm = await resolveSrmm(req, req.body?.srmm);
         if (Number.isFinite(messageTsMs))
             payload.message_ts_ms = Math.trunc(messageTsMs);
         if (messageSourceId)
@@ -25723,7 +25773,7 @@ async function proxyNarrativeSuggestion(req, res) {
         const cfg = readPluginConfig();
         const payload = buildMemuPayloadForLocal(cfg, userId, soulId);
         const srv = await ensureLocalServer(cfg);
-        const resp = await httpJson(srv.baseUrl, `/souls/${encodeURIComponent(soulId)}/narrative_suggestion`, "POST", { ...payload, user_id: userId, suggestion });
+        const resp = await httpJson(srv.baseUrl, `/souls/${encodeURIComponent(soulId)}/narrative_suggestion`, "POST", { ...payload, user_id: userId, suggestion, srmm: await resolveSrmm(req, req.body?.srmm) });
         res.json(resp ?? {});
     }
     catch (e) {
