@@ -909,8 +909,8 @@ function mappingCredentials(profile: AnyObject, context: ReturnType<typeof mappi
   return { ok: true, provider, baseUrl, key: key || '', model: String(selection.model || normalized.model || '') };
 }
 
-function mappingCatalog(context: ReturnType<typeof mappingContext>): AnyObject[] {
-  return context.profiles.map(profile => {
+function mappingCatalog(context: ReturnType<typeof mappingContext>, profiles = context.profiles): AnyObject[] {
+  return profiles.map(profile => {
     const normalized = normalizeProfile(profile);
     const entry: AnyObject = { profile_id: profile.id, provider: normalized.provider, label: profile.name || normalized.provider,
       models: normalized.model ? [{ model: normalized.model }] : [], supported: false };
@@ -936,7 +936,7 @@ async function resolveMappingSelection(selection: AnyObject, context: ReturnType
   }
   if (!profile) throw Object.assign(new Error('Configured ST connection not found'), { status: 400 });
   const credentials = mappingCredentials(native ? { ...profile, 'secret-id': undefined, secretId: undefined, api_key: undefined } : profile, context, selection, native);
-  const catalog = mappingCatalog(context).find(p => p.profile_id === profile.id);
+  const catalog = mappingCatalog(context, [profile])[0];
   let capacity = (native && Number.isInteger(selection.context_window_tokens) && selection.context_window_tokens > 0 ? selection.context_window_tokens : undefined)
     ?? catalog?.models.find((model: AnyObject) => model.model === selection.model)?.context_window_tokens;
   if (!capacity) {
@@ -1023,8 +1023,15 @@ async function resolveSrmmChoice(choice: AnyObject, context: ReturnType<typeof m
 export async function proxyModelMappings(req: Request, res: Response): Promise<void> {
   try {
     const context = mappingContext(req);
-    const native = req.method === 'GET' ? (typeof req.query?.native === 'string' ? JSON.parse(req.query.native) : undefined) : req.body?.native;
-    const srmm = req.method === 'GET' ? (typeof req.query?.srmm === 'string' ? JSON.parse(req.query.srmm) : undefined) : req.body?.srmm;
+    let native = req.body?.native, srmm = req.body?.srmm;
+    if (req.method === 'GET') {
+      try {
+        native = typeof req.query?.native === 'string' ? JSON.parse(req.query.native) : undefined;
+        srmm = typeof req.query?.srmm === 'string' ? JSON.parse(req.query.srmm) : undefined;
+      } catch {
+        throw Object.assign(new Error('Malformed model mapping query JSON'), { status: 400 });
+      }
+    }
     const srv = await ensureLocalServer(readPluginConfig());
     if (req.method === 'GET') {
       await httpJson(srv.baseUrl, '/reload', 'POST', {});

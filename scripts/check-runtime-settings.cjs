@@ -250,6 +250,9 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
     + slice('export async function proxyConversationTurn(', 'export async function proxyConversationTurnUndo(')
     + slice('export async function proxyNarrativeSuggestion(', 'export function registerNarrativeSuggestion(');
   vm.runInNewContext(ts.transpileModule(mappingCode, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, mapping);
+  let credentialCalls = 0;
+  const mappingCredentials = mapping.mappingCredentials;
+  mapping.mappingCredentials = (...args) => { credentialCalls++; return mappingCredentials(...args); };
   let projection, status;
   const mappingRes = { json: body => { projection = body; }, status: code => { status = code; return mappingRes; } };
   const request = { method: 'GET', user: { directories: { root: ownDir } }, query: {} };
@@ -264,6 +267,35 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   assert(!projection.providers.some(p => p.profile_id.startsWith('native:')));
   assert(!JSON.stringify(projection).includes('own-a-key')); assert(!JSON.stringify(projection).includes('embedding-key'));
   assert.equal(projection.mental_health_query, undefined, 'Mental Health is not a shared model mapping');
+  assert(credentialCalls <= profiles.length * 3, 'Projection must not rebuild every profile credential catalog per selection');
+  const profileCount = profiles.length;
+  for (let i = 0; i < profileCount; i++) profiles.push({ ...profiles[0], id: `catalog-${i}` });
+  credentialCalls = 0;
+  await mapping.exports.proxyModelMappings(request, mappingRes);
+  assert(credentialCalls <= profiles.length * 3, 'Credential work must grow linearly as the catalog grows');
+  profiles.splice(profileCount);
+
+  const ensureServer = mapping.ensureLocalServer, readSettings = mapping.readJsonIfExists;
+  const invalidReloads = reloads, invalidWrites = coreWrites;
+  mapping.ensureLocalServer = async () => assert.fail('Malformed JSON must not reach the server');
+  for (const key of ['native', 'srmm']) {
+    for (const raw of ['{', '']) {
+      status = undefined;
+      await mapping.exports.proxyModelMappings({ ...request, query: { [key]: raw } }, mappingRes);
+      assert.equal(status, 400, `Malformed ${key} JSON is a client error`);
+    }
+  }
+  assert.equal(reloads, invalidReloads); assert.equal(coreWrites, invalidWrites);
+  mapping.ensureLocalServer = async () => { throw new Error('Fictional backend unavailable'); };
+  status = undefined;
+  await mapping.exports.proxyModelMappings(request, mappingRes);
+  assert.equal(status, 503, 'Backend failures remain service errors');
+  mapping.ensureLocalServer = ensureServer;
+  mapping.readJsonIfExists = () => { throw new SyntaxError('Fictional settings JSON failure'); };
+  status = undefined;
+  await mapping.exports.proxyModelMappings(request, mappingRes);
+  assert.equal(status, 503, 'Server-side settings syntax errors are not query errors');
+  mapping.readJsonIfExists = readSettings;
   const before = coreWrites;
   const post = async body => {
     status = undefined;
@@ -414,8 +446,21 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   assert.equal(canonical.llm.context_window_tokens, 10000, 'Native capacity takes precedence over profile capacity');
   assert.equal(canonical.llm.api_key, '', 'Explicit custom connection remains keyless');
   assert.equal(discoveries, explicitDiscoveries);
-  delete metadataProfile.context_window_tokens;
+  await post({ base_model: { source: 'st_native', native: { profile_id: 'metadata', provider: 'custom', model: 'unavailable' } } });
+  assert.equal(canonical.llm.context_window_tokens, 12000, 'Eligible same-model profile capacity is retained without a native override');
   delete metadataProfile.api_key;
+  metadataProfile['secret-id'] = 'missing-saved-secret';
+  const legacyMistralSecret = secrets.api_key_mistralai;
+  delete secrets.api_key_mistralai;
+  mapping.MODEL_CACHE.clear();
+  metadataResponse = { data: [{ id: 'unavailable', context_length: 14000 }] };
+  await post({ base_model: { source: 'st_native', native: { profile_id: 'metadata', provider: 'custom', model: 'unavailable' } } });
+  assert.equal(status, undefined, 'Native selection may work with a broken saved secret');
+  assert.equal(canonical.llm.context_window_tokens, 14000, 'Broken saved credentials must not donate declared profile capacity');
+  secrets.api_key_mistralai = legacyMistralSecret;
+  delete metadataProfile['secret-id'];
+  delete metadataProfile.context_window_tokens;
+  mapping.MODEL_CACHE.clear();
   metadataResponse = { data: [{ id: 'unavailable', context_length: 13000 }] };
   await post({ base_model: { source: 'configured', profile_id: 'metadata' } });
   assert.equal(canonical.llm.api_key, ''); assert.equal(canonical.llm.context_window_tokens, 13000);
