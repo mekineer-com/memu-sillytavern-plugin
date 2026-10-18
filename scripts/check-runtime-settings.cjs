@@ -273,12 +273,12 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   assert.equal(coreWrites, before + 1); assert.equal(discoveries, 0);
   assert.equal(canonical.llm.step_models.memory_extract.api_key, 'own-a-key');
   assert.equal(canonical.llm.step_models.memory_extract.context_window_tokens, 8000);
-  assert.equal(projection.step_models.memory_extract.profile_id, 'a');
+  assert.equal(projection.step_models.memory_extract.profile_ids[0], 'a');
   await post({ step_models: { memory_extract: { source: 'configured', profile_id: 'a-twin' } } });
-  assert.equal(projection.step_models.memory_extract.profile_id, 'a-twin');
+  assert.equal(projection.step_models.memory_extract.profile_ids[0], 'a-twin');
   canonical.llm.step_models.memory_extract.api_key = 'hand-only-credential';
   await mapping.exports.proxyModelMappings(request, mappingRes);
-  assert.equal(projection.step_models.memory_extract.profile_id, undefined, 'Changed key cannot match by URL/model');
+  assert.equal(projection.step_models.memory_extract.profile_ids[0], undefined, 'Changed key cannot match by URL/model');
   canonical.llm.step_models.memory_extract.api_key = 'own-a-key';
 
   assert.equal(canonical.llm.step_models.reflection, 'hand-model');
@@ -366,7 +366,7 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   metadataResponse = { data: [{ id: 'chosen-model', context_length: 32000 }, { id: 'other-model', context_length: 999999 }] };
   await post({ base_model: { source: 'configured', profile_id: 'metadata' } });
   assert.equal(status, undefined); assert.equal(canonical.llm.context_window_tokens, 32000);
-  assert.equal(projection.base_model.profile_id, 'metadata');
+  assert.equal(projection.base_model.profile_ids[0], 'metadata');
   assert.equal(projection.providers.find(p => p.profile_id === 'metadata').models.length, 1, 'Never expose discovered model dropdowns');
   assert.deepEqual(metadataCalls.at(-1), { url: 'https://metadata.invalid/v1/models',
     headers: { Authorization: 'Bearer scoped-metadata-key', 'x-api-key': 'scoped-metadata-key' } });
@@ -426,7 +426,7 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   await mapping.exports.proxyModelMappings(request, mappingRes);
   assert.equal(canonical.llm.context_window_tokens, 11000, 'Catalog refresh must preserve hand capacity');
   assert.equal(discoveries, beforeColdRefresh, 'Fresh profile display never needs discovery');
-  assert.equal(projection.base_model.profile_id, 'metadata', 'Derived or hand capacity must not erase the selected profile identity');
+  assert.equal(projection.base_model.profile_ids[0], 'metadata', 'Derived or hand capacity must not erase the selected profile identity');
   assert.deepEqual(normalize(projection.base_model.profile_ids), ['metadata']);
   const nativeLocal = { profile_id: 'native:cc:custom', provider: 'custom', model: 'native-local', base_url: 'http://localhost:5678/v1' };
   await post({ native: nativeLocal, base_model: { source: 'st_native', native: nativeLocal } });
@@ -448,6 +448,30 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   assert(projection.base_model.profile_ids.includes('a-twin'));
   assert.equal(projection.base_model.native_match, false, 'A saved profile ID is not proof of matching live credentials');
   assert(!JSON.stringify(projection).includes('own-twin-key'));
+  const sharedReply = { source: 'config' };
+  const beforeShared = coreWrites;
+  await post({ srmm: sharedReply, base_model: { source: 'configured', profile_id: 'b' },
+    step_models: { reflection: { source: 'srmm', srmm: { ...sharedReply, native: null } } } });
+  assert.equal(coreWrites, beforeShared + 1, 'Base and its SRMM followers must use one config write');
+  assert.equal(canonical.llm.chat_model, profiles.find(p => p.id === 'b').model);
+  assert.equal(canonical.llm.step_models.reflection.chat_model, canonical.llm.chat_model);
+  assert.equal(canonical.llm.step_models.reflection.api_key, canonical.llm.api_key, 'Followers resolve the new base, not the previous base');
+  assert.equal(projection.step_models.reflection.srmm_match, true);
+  const untouched = JSON.stringify(canonical), writesBeforeConfig = coreWrites;
+  await post({ base_model: { source: 'config' }, step_models: { reflection: { source: 'config' } } });
+  assert.equal(JSON.stringify(canonical), untouched, 'Config selection keeps all existing values and capacities');
+  assert.equal(coreWrites, writesBeforeConfig);
+  await post({ base_model: { source: 'srmm', srmm: { source: 'configured', profile_id: 'a' } }, srmm: { source: 'configured', profile_id: 'a' } });
+  assert.equal(canonical.llm.chat_model, profiles.find(p => p.id === 'a').model, 'OOAR supports SRMM as its selected source');
+  assert.equal(projection.base_model.srmm_match, true);
+  profiles.find(p => p.id === 'a').model = 'profile-updated-model';
+  await post({ base_model: { source: 'configured', profile_id: 'a' } });
+  assert.equal(canonical.llm.chat_model, 'profile-updated-model', 'A saved profile update resolves current profile values by ID');
+  mapping.MODEL_CACHE.clear();
+  await mapping.exports.proxyModelMappings({ ...request, query: { srmm: JSON.stringify({ source: 'configured', profile_id: 'a' }) } }, mappingRes);
+  assert.equal(projection.base_model.srmm_match, true, 'SRMM match survives a cold metadata cache');
+  assert.equal(Object.hasOwn(canonical, 'srmm'), false);
+  assert.equal(Object.hasOwn(canonical.llm, 'srmm_match'), false);
   const beforeUnauthenticated = reloads;
   await mapping.exports.proxyModelMappings({ method: 'GET' }, mappingRes);
   assert.equal(status, 403); assert.equal(reloads, beforeUnauthenticated);

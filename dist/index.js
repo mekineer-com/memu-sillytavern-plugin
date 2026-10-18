@@ -24642,7 +24642,7 @@ async function resolveMappingSelection(selection, context, native = false, disco
         ...(capacity ? { context_window_tokens: capacity } : {}),
         ...(native && Number.isInteger(selection.max_tokens) && selection.max_tokens > 0 ? { max_tokens: selection.max_tokens } : {}) };
 }
-async function modelMappingProjection(config, context, native) {
+async function modelMappingProjection(config, context, native, srmm) {
     const llm = config.llm || {};
     const providers = mappingCatalog(context);
     // /config masks keys. Compare locally so a same-URL/model profile with a different key is never guessed.
@@ -24664,11 +24664,22 @@ async function modelMappingProjection(config, context, native) {
                 throw error;
         }
     }
+    let srmmConnection;
+    if (srmm) {
+        try {
+            const resolved = await resolveSrmmChoice({ ...srmm, native }, context, false);
+            srmmConnection = resolved === 'config' ? actual : resolved;
+        }
+        catch (error) {
+            if (error.status !== 400)
+                throw error;
+        }
+    }
     const sameConnection = (a, b) => !!a && !!b
         && ['provider', 'base_url', 'api_key', 'chat_model'].every(key => a[key] === b[key]);
     const hints = (connection) => {
         const ids = connections.filter(candidate => sameConnection(connection, candidate.connection)).map(candidate => candidate.profile_id);
-        return { profile_id: ids[0], profile_ids: ids, native_match: sameConnection(connection, nativeConnection) };
+        return { profile_ids: ids, native_match: sameConnection(connection, nativeConnection), srmm_match: sameConnection(connection, srmmConnection) };
     };
     const withoutKeys = (value) => Array.isArray(value) ? value.map(withoutKeys)
         : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value)
@@ -24690,12 +24701,16 @@ function mappingSelection(selection) {
 async function resolveSrmm(req, choice) {
     if (choice?.source === 'config')
         return 'config';
-    const context = mappingContext(req);
+    return resolveSrmmChoice(choice, mappingContext(req));
+}
+async function resolveSrmmChoice(choice, context, discover = true) {
+    if (choice?.source === 'config')
+        return 'config';
     if (choice?.source === 'configured') {
         const profile = context.profiles.find(profile => profile.id === choice.profile_id);
         if (profile) {
             const normalized = normalizeProfile(profile);
-            return resolveMappingSelection({ profile_id: profile.id, provider: normalized.provider, model: normalized.model }, context);
+            return resolveMappingSelection({ profile_id: profile.id, provider: normalized.provider, model: normalized.model }, context, false, discover);
         }
     }
     else if (choice?.source !== 'st_native') {
@@ -24703,12 +24718,13 @@ async function resolveSrmm(req, choice) {
     }
     if (!choice.native)
         throw Object.assign(new Error('SillyTavern has no selected model'), { status: 400 });
-    return resolveMappingSelection(mappingSelection(choice.native), context, true);
+    return resolveMappingSelection(mappingSelection(choice.native), context, true, discover);
 }
 async function proxyModelMappings(req, res) {
     try {
         const context = mappingContext(req);
         const native = req.method === 'GET' ? (typeof req.query?.native === 'string' ? JSON.parse(req.query.native) : undefined) : req.body?.native;
+        const srmm = req.method === 'GET' ? (typeof req.query?.srmm === 'string' ? JSON.parse(req.query.srmm) : undefined) : req.body?.srmm;
         const srv = await ensureLocalServer(readPluginConfig());
         if (req.method === 'GET') {
             await httpJson(srv.baseUrl, '/reload', 'POST', {});
@@ -24728,11 +24744,11 @@ async function proxyModelMappings(req, res) {
                     if (connection !== 'config')
                         return connection;
                     const root = sanitizeIncomingConfig(readPluginConfig()).serverPath;
-                    const llm = root ? _readExternalServerConfig(root)?.llm : undefined;
-                    if (!llm || typeof llm.api_key !== 'string')
+                    const base = { ...(root ? _readExternalServerConfig(root)?.llm : undefined), ...llm };
+                    if (typeof base.api_key !== 'string')
                         throw Object.assign(new Error('SRMM copy needs a configured server path and base API connection'), { status: 400 });
                     return Object.fromEntries(['provider', 'base_url', 'api_key', 'chat_model', 'context_window_tokens', 'max_tokens', 'endpoint_overrides', 'temperature']
-                        .filter(key => llm[key] !== undefined && llm[key] !== null).map(key => [key, llm[key]]));
+                        .filter(key => base[key] !== undefined && base[key] !== null).map(key => [key, base[key]]));
                 }
                 if (row?.source === 'configured' && !context.profiles.some(profile => profile.id === row.profile_id)) {
                     throw Object.assign(new Error('Configured ST connection not found'), { status: 400 });
@@ -24741,21 +24757,6 @@ async function proxyModelMappings(req, res) {
                     return resolveSrmm(req, row);
                 return resolveMappingSelection(mappingSelection(row), context);
             };
-            if (body.step_models !== undefined) {
-                llm.step_models = {};
-                llm.step_context_window_tokens = {};
-                for (const [step, row] of Object.entries(body.step_models)) {
-                    if (!['preprocess', 'memory_extract', 'category_update', 'reflection', 'consolidation'].includes(step)) {
-                        throw Object.assign(new Error('Invalid model mapping step'), { status: 400 });
-                    }
-                    llm.step_models[step] = row === null ? null
-                        : !row.profile_id && !row.source && typeof row.model === 'string' && row.model.trim() ? row.model
-                            : await resolveRow(row);
-                    if (llm.step_models[step] === 'config')
-                        llm.step_models[step] = null;
-                    llm.step_context_window_tokens[step] = null;
-                }
-            }
             if (body.base_model !== undefined) {
                 const deleted = body.base_model?.source === 'configured' && !context.profiles.some(profile => profile.id === body.base_model.profile_id);
                 const connection = deleted ? 'config' : await resolveRow(body.base_model);
@@ -24765,13 +24766,32 @@ async function proxyModelMappings(req, res) {
                     }
                 }
             }
+            if (body.step_models !== undefined) {
+                llm.step_models = {};
+                llm.step_context_window_tokens = {};
+                for (const [step, row] of Object.entries(body.step_models)) {
+                    if (!['preprocess', 'memory_extract', 'category_update', 'reflection', 'consolidation'].includes(step)) {
+                        throw Object.assign(new Error('Invalid model mapping step'), { status: 400 });
+                    }
+                    if (row?.source === 'config')
+                        continue;
+                    llm.step_models[step] = row === null ? null
+                        : !row.profile_id && !row.source && typeof row.model === 'string' && row.model.trim() ? row.model
+                            : await resolveRow(row);
+                    llm.step_context_window_tokens[step] = null;
+                }
+                if (!Object.keys(llm.step_models).length) {
+                    delete llm.step_models;
+                    delete llm.step_context_window_tokens;
+                }
+            }
             if (Object.keys(llm).length)
                 patch.llm = llm;
             if (Object.keys(patch).length)
                 await httpJson(srv.baseUrl, '/config', 'POST', patch);
         }
         const result = await httpJson(srv.baseUrl, '/config', 'GET');
-        res.json(await modelMappingProjection(result.config, context, native));
+        res.json(await modelMappingProjection(result.config, context, native, srmm));
     }
     catch (error) {
         res.status(Number.isInteger(error.status) ? error.status : 503).json({ error: error.detail || error.message || String(error) });
