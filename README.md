@@ -80,9 +80,9 @@ In **local mode**, the plugin talks to an external HTTP service: `mcp-memu-serve
   1. `MEMU_SERVER_URL` / `MCP_MEMU_SERVER_URL`
   2. `<serverPath>/config.json` listen host/port
   3. fallback `http://127.0.0.1:8099`
-- If `autoStartServer` is enabled and `<serverPath>/run.py` exists, the plugin can start the server automatically.
+- If `autoStartWithSillyTavern` is `true` (default `false`), the plugin starts the server with SillyTavern.
 - The plugin chooses Python from `mcp-memu-server` config/venv when available, else falls back to `python3`.
-- In the example file, each `stepProfileId` key is optional. If you remove one, that step falls back to `defaultProfileId`.
+- Models are chosen in the MemU extension's Model Mapping panel, not in this file.
 
 `memU` is still required, but it is loaded by `mcp-memu-server` (not by a plugin-local helper process).
 
