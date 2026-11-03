@@ -2055,7 +2055,7 @@ export async function proxySouls(req: Request, res: Response): Promise<void> {
         : '/souls',
       req.method === 'POST' ? 'POST' : 'GET',
       req.method === 'POST'
-        ? { soul_id: String(req.body?.soul_id || ''), use_existing: Boolean(req.body?.use_existing), ...(req.body?.user_name !== undefined ? { user_name: req.body.user_name } : {}) }
+        ? { soul_id: String(req.body?.soul_id || ''), use_existing: Boolean(req.body?.use_existing) }
         : undefined,
     );
     res.json(result);

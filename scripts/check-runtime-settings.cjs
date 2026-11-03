@@ -178,8 +178,8 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   const res = { json: value => { result = value; }, status() { assert.fail('Unexpected proxy failure'); } };
   for (const user_name of [undefined, 'TestOwner']) {
     await soulContext.exports.proxySouls({ method: 'POST', params: {}, body: { soul_id: 'TestSoul', ...(user_name !== undefined ? { user_name } : {}) } }, res);
-    assert.equal(result.body.soul_id, 'TestSoul'); assert.equal(result.body.user_name, user_name);
-    assert.equal(Object.hasOwn(result.body, 'user_name'), user_name !== undefined);
+    assert.equal(result.body.soul_id, 'TestSoul'); assert.equal(result.body.use_existing, false);
+    assert.equal(Object.hasOwn(result.body, 'user_name'), false);
   }
   await soulContext.exports.proxySouls({ method: 'GET', params: { soulId: 'Test Soul' } }, res);
   assert.equal(result.route, '/souls/Test%20Soul'); assert.equal(result.method, 'GET'); assert.equal(result.body, undefined);
@@ -187,7 +187,7 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   assert.equal(result.route, '/souls/Test%20Soul?include_narrative=true');
   await soulContext.exports.proxySouls({ method: 'GET', params: { soulId: 'Test Soul' }, query: { include_narrative: 'false' } }, res);
   assert.equal(result.route, '/souls/Test%20Soul');
-  console.log('Soul creation forwards optional binding; live narrative GET is explicitly opt-in.');
+  console.log('Soul creation leaves owner binding to MCP; live narrative GET is explicitly opt-in.');
 
   context.readPluginConfig = () => cfg;
   context.ensureLocalServer = async () => ({ baseUrl: 'http://test.invalid' });
