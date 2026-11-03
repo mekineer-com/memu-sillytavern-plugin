@@ -61,7 +61,6 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
     assert.equal(wire.mental_health_addon, enabled, 'Per-Soul choice must override the shared default in both directions');
   }
   await context.exports.proxyConversationRetrieve({ body: { userId: 'TestOwner', soulId: 'TestSoul', conversationId: 'test-chat', query: 'Draft' } }, res);
-  assert.equal(Object.hasOwn(wire, 'mental_health_addon'), false);
   assert.equal(Object.hasOwn(wire, 'mental_health_addon'), false, 'ST retrieval must inherit the server setting');
   context.buildMemuPayloadForLocal = memoryBuilder;
   for (const status of ['accepted', 'started', 'waiting_for_import', 'deferred', 'nothing_to_memorize', 'published', 'coalesced']) {
