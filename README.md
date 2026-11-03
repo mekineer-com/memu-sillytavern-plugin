@@ -67,6 +67,8 @@ This plugin stores its settings in a file named `memu-plugin.config.json` in you
 In **local mode**, the plugin talks to an external HTTP service: `mcp-memu-server`.
 
 - `serverPath` points to your `mcp-memu-server` folder (for example: `/path/to/mcp-memu-server`).
+- `MEMU_SERVER_PATH`, when set, takes precedence over the saved path. OpenAlma
+  supplies its current folder when launching ST; standalone ST uses the saved path.
 - Base URL is resolved in this order:
   1. `MEMU_SERVER_URL` / `MCP_MEMU_SERVER_URL`
   2. `<serverPath>/config.json` listen host/port

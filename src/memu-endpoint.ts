@@ -151,7 +151,7 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
 
   // External server settings (local mode): only serverPath is user-configurable.
   const serverPathRaw = String((cfg as any).serverPath || '').trim();
-  (cfg as any).serverPath = serverPathRaw || DEFAULT_CONFIG.serverPath;
+  (cfg as any).serverPath = DEFAULT_CONFIG.serverPath || serverPathRaw || undefined;
   cfg.autoStartWithSillyTavern = cfg.autoStartWithSillyTavern === true;
 
   cfg.updatedAt = new Date().toISOString();
@@ -1211,7 +1211,7 @@ function _readLogTail(logPath: string | null, maxLines: number): string[] {
   }
 }
 
-function spawnExternalServer(pythonExe: string, runPyPath: string, cfg?: MemuPluginConfig): number | null {
+function spawnExternalServer(pythonExe: string, runPyPath: string): number | null {
   try {
     const child = spawn(pythonExe, [runPyPath], {
       cwd: path.dirname(runPyPath),
@@ -1257,36 +1257,33 @@ async function waitForServerHealthy(baseUrl: string): Promise<void> {
 async function ensureLocalServer(
   cfg: MemuPluginConfig,
   opts: { forceStart?: boolean } = {},
-): Promise<{ baseUrl: string; host: string; port: number; startedPid?: number }> {
+): Promise<{ baseUrl: string; host: string; port: number; startedPid?: number; serverInstanceId?: string | null }> {
   // External server (mcp-memu-server). No Python probing required here.
   const baseUrl = getExternalServerBaseUrl(cfg);
   const shouldStartIfDown = opts.forceStart === true;
   let startedPid: number | null = null;
-  const healthNow = await _externalServerHealthInfo(baseUrl);
+  let healthNow = await _externalServerHealthInfo(baseUrl);
   if (healthNow.unavailable) throw new Error('memU Server status is unavailable.');
 
   if (!healthNow.healthy) {
-    if (shouldStartIfDown) {
-      // Only explicit Start or ST's optional startup hook may launch the server.
-      const runPy = getExternalServerRunPy(cfg);
-      if (runPy && fs.existsSync(runPy)) {
-        const now = Date.now();
-        if (now >= _externalSpawnCooldownUntilUnixMs) {
-          _externalSpawnCooldownUntilUnixMs = now + 5000;
-          const pythonExe = getExternalServerPython(cfg);
-          startedPid = spawnExternalServer(pythonExe, runPy, cfg);
-        }
+    if (!shouldStartIfDown) throw new Error("memU Server is stopped. Click Start.");
+    // Only explicit Start or ST's optional startup hook may launch the server.
+    const runPy = getExternalServerRunPy(cfg);
+    if (runPy && fs.existsSync(runPy)) {
+      const now = Date.now();
+      if (now >= _externalSpawnCooldownUntilUnixMs) {
+        _externalSpawnCooldownUntilUnixMs = now + 5000;
+        const pythonExe = getExternalServerPython(cfg);
+        startedPid = spawnExternalServer(pythonExe, runPy);
       }
-      await waitForServerHealthy(baseUrl);
     }
-    const healthAfter = await _externalServerHealthInfo(baseUrl);
-    if (healthAfter.unavailable) throw new Error('memU Server status is unavailable.');
-    if (!healthAfter.healthy) {
-      if (shouldStartIfDown) {
-        throw new Error("mcp-memu-server did not become healthy");
-      }
-      throw new Error("memU Server is stopped. Click Start.");
-    }
+    await waitForServerHealthy(baseUrl);
+    healthNow = await _externalServerHealthInfo(baseUrl);
+    if (healthNow.unavailable) throw new Error('memU Server status is unavailable.');
+    if (!healthNow.healthy) throw new Error("mcp-memu-server did not become healthy");
+  }
+  if (shouldStartIfDown && (healthNow.shutdown?.draining || healthNow.shutdown?.stopping)) {
+    throw new Error('memU Server is stopping; start it again after it stops.');
   }
 
   let host = '127.0.0.1';
@@ -1300,7 +1297,7 @@ async function ensureLocalServer(
     throw new Error(`MEMU_SERVER_URL is not a valid URL: ${baseUrl} (${msg})`);
   }
 
-  return { baseUrl, host, port, ...(startedPid ? { startedPid } : {}) };
+  return { baseUrl, host, port, serverInstanceId: healthNow.serverInstanceId, ...(startedPid ? { startedPid } : {}) };
 }
 
 type ExternalServerShutdownInfo = {
@@ -1418,7 +1415,7 @@ export async function externalServerStart(): Promise<{ ok: boolean; message?: st
   }
 }
 
-export async function externalServerStop(config?: MemuPluginConfig, confirmUnknown = false): Promise<{ ok: boolean; confirmationRequired?: boolean; message?: string; status?: any }> {
+export async function externalServerStop(config?: MemuPluginConfig): Promise<{ ok: boolean; message?: string; status?: any }> {
   try {
     const cfg = config || readPluginConfig();
 
@@ -1429,19 +1426,6 @@ export async function externalServerStop(config?: MemuPluginConfig, confirmUnkno
     }
     if (!healthBefore.healthy) {
       return { ok: true, message: 'Server process not running.', status: await externalServerStatus() };
-    }
-
-    let busy: unknown;
-    try {
-      busy = (await httpJson(baseUrl, '/integration/mentra/status', 'GET', undefined, 2_000))?.busy;
-    } catch { /* Unknown activity requires explicit confirmation below. */ }
-    if (busy === true) {
-      return { ok: false, message: 'Stop the Iris conversation on the phone first.', status: await externalServerStatus() };
-    }
-    if (busy !== false && !confirmUnknown) {
-      return { ok: false, confirmationRequired: true,
-        message: 'Iris activity cannot be checked. Stopping may interrupt a conversation or lose pending work. Stop anyway?',
-        status: await externalServerStatus() };
     }
 
     await httpJson(baseUrl, '/admin/shutdown', 'POST', {
@@ -1488,9 +1472,8 @@ export async function startServerWithSillyTavern(): Promise<void> {
     if (!cfg.autoStartWithSillyTavern) return;
     const started = await ensureLocalServer(cfg, { forceStart: true });
     if (!started.startedPid) return;
-    const health = await _externalServerHealthInfo(started.baseUrl);
-    if (health.serverInstanceId) {
-      _stStartedServer = { cfg, instanceId: health.serverInstanceId };
+    if (started.serverInstanceId) {
+      _stStartedServer = { cfg, instanceId: started.serverInstanceId };
     }
   } catch (error) {
     console.warn('[memu] ST automatic startup failed:', error);
@@ -1522,7 +1505,7 @@ export function registerServerControl(router: Router): void {
   });
 
   router.post('/server/stop', async (req: Request, res: Response) => {
-    return res.json(await externalServerStop(undefined, req.body?.confirm_unknown === true));
+    return res.json(await externalServerStop());
   });
 }
 

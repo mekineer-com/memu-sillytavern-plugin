@@ -33,7 +33,8 @@ const managed = { ...context, exports: {}, process: { env: { MEMU_SERVER_PATH: '
 vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, managed);
 assert.equal(managed.sanitizeIncomingConfig({}).serverPath, '/fictional/managed/server');
 assert.equal(managed.sanitizeIncomingConfig({ serverPath: '  ' }).serverPath, '/fictional/managed/server');
-assert.equal(managed.sanitizeIncomingConfig({ serverPath: '/fictional/manual/server' }).serverPath, '/fictional/manual/server');
+assert.equal(managed.sanitizeIncomingConfig({ serverPath: '/fictional/old/server' }).serverPath, '/fictional/managed/server');
+assert.equal(context.sanitizeIncomingConfig({ serverPath: '/fictional/manual/server' }).serverPath, '/fictional/manual/server');
 const normalize = value => JSON.parse(JSON.stringify(value));
 // Transition cleanup expires 2027-01-17: remove this old-mapping upgrade handling.
 const saved = { serverPath: '/fictional/server', autoStartWithSillyTavern: false, embeddingBatchSize: 9,
@@ -104,13 +105,13 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
     const calls = { starts: 0, stops: 0, warnings: [], cfg, instance: 'fictional-instance', busy, alive: true };
     const env = { exports: {}, process: { env: managed ? { MEMU_SERVER_MANAGED: 'launcher' } : {} },
       readPluginConfig: () => cfg,
-      ensureLocalServer: async () => { calls.starts++; return { baseUrl: 'http://fictional.invalid', startedPid }; },
+      ensureLocalServer: async () => { calls.starts++; return { baseUrl: 'http://fictional.invalid', startedPid, serverInstanceId: calls.instance }; },
       getExternalServerBaseUrl: actual => { assert.equal(actual, cfg); return 'http://fictional.invalid'; },
       _externalServerHealthInfo: async () => ({ healthy: calls.alive, serverInstanceId: calls.instance }),
       externalServerStatus: async () => ({ ok: true, healthy: calls.alive }),
       httpJson: async (_base, route, _method, body) => {
-        if (route === '/integration/mentra/status') return { busy: calls.busy };
         assert.equal(route, '/admin/shutdown'); assert.equal(body.max_wait_sec, 0);
+        if (calls.busy === true) throw new Error('Stop the Iris conversation on the phone first');
         calls.stops++; calls.alive = false; return { ok: true };
       },
       console: { warn: (...args) => calls.warnings.push(args) },
@@ -128,12 +129,12 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   }
   const replacement = hooks(); await replacement.start(); replacement.calls.instance = 'replacement';
   await replacement.stop(); assert.equal(replacement.calls.stops, 0);
-  for (const busy of [true, undefined]) {
-    const hook = hooks(); await hook.start(); hook.calls.busy = busy;
-    await hook.stop(); assert.equal(hook.calls.stops, 0); assert.equal(hook.calls.warnings.length, 1);
-  }
+  const busy = hooks({ busy: true }); await busy.start(); await busy.stop();
+  assert.equal(busy.calls.stops, 0); assert.match(busy.calls.warnings[0].join(' '), /Iris conversation/);
+  const unchecked = hooks(); unchecked.calls.busy = undefined; await unchecked.start(); await unchecked.stop();
+  assert.equal(unchecked.calls.stops, 1); assert.equal(unchecked.calls.warnings.length, 0);
   const unknown = hooks(); await unknown.start();
-  unknown.env.httpJson = async () => { throw new Error('Fictional Iris status failure'); };
+  unknown.env.httpJson = async () => { throw new Error('Fictional shutdown failure'); };
   await unknown.stop(); assert.equal(unknown.calls.stops, 0); assert.equal(unknown.calls.warnings.length, 1);
   const failed = hooks(); failed.env.ensureLocalServer = async () => { throw new Error('Fictional startup failure'); };
   await failed.start(); await failed.stop(); assert.equal(failed.calls.stops, 0); assert.equal(failed.calls.warnings.length, 1);
@@ -142,14 +143,8 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   await owned.stop(); await owned.stop(); assert.equal(owned.calls.stops, 1);
   const active = hooks({ busy: true });
   assert.equal((await active.env.exports.externalServerStop()).ok, false);
-  assert.equal((await active.env.exports.externalServerStop(undefined, true)).ok, false);
   assert.equal(active.calls.stops, 0);
-  const unchecked = hooks(); unchecked.calls.busy = undefined;
-  assert.equal((await unchecked.env.exports.externalServerStop()).confirmationRequired, true);
-  assert.equal(unchecked.calls.stops, 0);
-  assert.equal((await unchecked.env.exports.externalServerStop(undefined, true)).ok, true);
-  assert.equal(unchecked.calls.stops, 1);
-  const healthEnv = { exports: {}, process: { env: {} }, AbortSignal, _externalServerInstanceId: null, _externalServerEphemeralDb: null,
+  const healthEnv = { exports: {}, process: { env: {} }, URL, AbortSignal, _externalServerInstanceId: null, _externalServerEphemeralDb: null,
     readPluginConfig: () => ({}), getExternalServerBaseUrl: () => 'http://fictional.invalid',
     _getExternalLogFile: () => null, _readLogTail: () => [],
     fetch: async () => { throw new Error('Fictional health timeout'); },
@@ -162,11 +157,20 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
     'A real health-probe failure must refuse Start before attempting to spawn');
   healthEnv.fetch = async () => { throw Object.assign(new Error('Refused'), { cause: { code: 'ECONNREFUSED' } }); };
   const offline = await healthEnv.exports.externalServerStatus();
-  assert.equal(offline.ok, true); assert.equal(offline.running, false);
+  assert.equal(offline.ok, true); assert.equal(offline.healthy, false);
+  let refusedProbes = 0;
+  healthEnv.fetch = async () => { refusedProbes++; throw Object.assign(new Error('Refused'), { cause: { code: 'ECONNREFUSED' } }); };
+  await assert.rejects(healthEnv.ensureLocalServer({}), /Click Start/);
+  assert.equal(refusedProbes, 1, 'A background request must not repeat a confirmed-offline probe');
+  for (const flag of ['draining', 'stopping']) {
+    healthEnv.fetch = async () => ({ ok: true, text: async () => JSON.stringify({ shutdown: { [flag]: true } }) });
+    await assert.rejects(healthEnv.ensureLocalServer({}, { forceStart: true }), /stopping.*after it stops/);
+    assert.equal((await healthEnv.ensureLocalServer({})).baseUrl, 'http://fictional.invalid');
+  }
   const entrySource = fs.readFileSync(`${__dirname}/../src/index.ts`, 'utf8');
   assert(entrySource.includes('await startServerWithSillyTavern();'));
   assert(entrySource.includes('await stopServerWithSillyTavern();'));
-  console.log('ST hooks: both launch modes respect Auto Start, disabled/existing/replaced cases retained, spawned instance stopped once without PID inspection, busy/unknown Iris retained.');
+  console.log('ST hooks: both launch modes respect Auto Start, instance ownership retained, server-side Iris refusal and shutdown failures remain visible.');
   const routes = [];
   soulContext.exports.registerSouls({ get: route => routes.push(route), post: route => routes.push(route) });
   assert(routes.includes('/souls/:soulId'));
