@@ -61,15 +61,6 @@ This plugin stores its settings in a file named `memu-plugin.config.json` in you
 
 - The file is **auto-created** the first time the plugin runs.
 - The MemU browser extension normally updates it by calling `GET/POST /api/plugins/memu/config`.
-- A shipped example file lives at `plugins/memu-plugin/memu-plugin.config.example.json`.
-
-Copy the example into your SillyTavern root like this:
-
-```bash
-cp plugins/memu-plugin/memu-plugin.config.example.json ./memu-plugin.config.json
-```
-
-That destination is the folder that contains `config.yaml`, `server.js`, `plugins/`, and `data/`.
 
 ### Local mode: how the plugin runs
 

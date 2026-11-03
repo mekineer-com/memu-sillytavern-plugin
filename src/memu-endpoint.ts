@@ -58,10 +58,6 @@ interface MemuPluginConfig {
   serverPath?: string;
   autoStartWithSillyTavern?: boolean;
 
-  // Embeddings model fields (dropdown overrides manual).
-  embeddingModelSelected?: string;
-  embeddingModelManual?: string;
-  embeddingBatchSize?: number;
 }
 
 const CONFIG_FILENAME = "memu-plugin.config.json";
@@ -73,7 +69,6 @@ const DEFAULT_CONFIG: MemuPluginConfig = {
   //   baseUrl: http://127.0.0.1:8099  (or env MEMU_SERVER_URL)
   //   command: <serverPath>/run.py (spawned via python, no shell)
   serverPath: String(process.env.MEMU_SERVER_PATH || '').trim() || undefined,
-  embeddingBatchSize: 25,
   updatedAt: new Date().toISOString(),
 };
 
@@ -154,14 +149,6 @@ function sanitizeIncomingConfig(obj: any): MemuPluginConfig {
   // Transition cleanup expires 2027-01-17: remove this old-mapping upgrade handling.
   for (const key of ['useServerSettings', 'useClaudeCode', 'defaultProfileId', 'stepProfileId']) delete (cfg as any)[key];
 
-  // Normalize/derive embedding model fields (dropdown overrides manual).
-  const selected = typeof (cfg as any).embeddingModelSelected === "string" ? String((cfg as any).embeddingModelSelected).trim() : "";
-  const manual = typeof (cfg as any).embeddingModelManual === "string" ? String((cfg as any).embeddingModelManual).trim() : "";
-  (cfg as any).embeddingModelSelected = selected || undefined;
-  (cfg as any).embeddingModelManual = manual || undefined;
-  const embeddingBatchSize = Number((cfg as any).embeddingBatchSize);
-  (cfg as any).embeddingBatchSize =
-    Number.isFinite(embeddingBatchSize) && embeddingBatchSize > 0 ? Math.floor(embeddingBatchSize) : 25;
   // External server settings (local mode): only serverPath is user-configurable.
   const serverPathRaw = String((cfg as any).serverPath || '').trim();
   (cfg as any).serverPath = serverPathRaw || DEFAULT_CONFIG.serverPath;
@@ -473,6 +460,7 @@ function loadSecrets(userDir?: string): AnyObject | null {
 
 function _extractKeyValue(entry: any, wantedId?: string | null, strictId: boolean = false): string | null {
   if (!entry) return null;
+  if (strictId && !Array.isArray(entry)) return null;
   if (typeof entry === 'string' && entry.trim()) return entry.trim();
 
   // Newer ST secrets.json format: api_key_<provider> is an array of {id,value,label,active}

@@ -296,11 +296,27 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   await mapping.exports.proxyModelMappings(request, mappingRes);
   assert.equal(status, 503, 'Server-side settings syntax errors are not query errors');
   mapping.readJsonIfExists = readSettings;
-  const before = coreWrites;
+  for (const entry of ['unrelated-key', { value: 'unrelated-key' }, [{ id: 'unrelated', value: 'unrelated-key' }]]) {
+    const mixed = { api_key_legacy: entry, ...secrets };
+    assert.equal(mapping.pickKeyForProvider('openai', mixed, 'a-key'), 'own-a-key');
+    assert.equal(mapping.pickKeyForProvider('openai', mixed, 'deleted-key'), null);
+  }
   const post = async body => {
     status = undefined;
     await mapping.exports.proxyModelMappings({ ...request, method: 'POST', body }, mappingRes);
   };
+  const before = coreWrites, beforeDiscovery = discoveries;
+  profiles[0]['secret-id'] = 'deleted-key';
+  for (const entry of ['unrelated-key', { value: 'unrelated-key' }]) {
+    mapping.readJsonIfExists = file => file.endsWith('settings.json') ? settings : { api_key_legacy: entry, ...secrets };
+    await post({ base_model: { source: 'configured', profile_id: 'a' } });
+    assert.equal(status, 400);
+    assert.match(projection.error, /Configured secret not found/);
+    assert.equal(coreWrites, before);
+    assert.equal(discoveries, beforeDiscovery);
+  }
+  profiles[0]['secret-id'] = 'a-key';
+  mapping.readJsonIfExists = readSettings;
   await post({ step_models: { memory_extract: { source: 'configured', profile_id: 'a', api_key: 'forged-key', resolved: { api_key: 'forged-key' } } } });
   assert.equal(coreWrites, before + 1); assert.equal(discoveries, 0);
   assert.equal(canonical.llm.step_models.memory_extract.api_key, 'own-a-key');
