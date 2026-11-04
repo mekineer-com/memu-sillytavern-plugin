@@ -5,9 +5,6 @@ interface MemuPluginConfig {
     updatedAt: string;
     serverPath?: string;
     autoStartWithSillyTavern?: boolean;
-    embeddingModelSelected?: string;
-    embeddingModelManual?: string;
-    embeddingBatchSize?: number;
 }
 export declare function getPluginConfig(): MemuPluginConfig;
 export declare function setPluginConfig(obj: any): MemuPluginConfig;
@@ -70,9 +67,8 @@ export declare function externalServerStart(): Promise<{
     message?: string;
     status?: any;
 }>;
-export declare function externalServerStop(config?: MemuPluginConfig, confirmUnknown?: boolean): Promise<{
+export declare function externalServerStop(config?: MemuPluginConfig): Promise<{
     ok: boolean;
-    confirmationRequired?: boolean;
     message?: string;
     status?: any;
 }>;
@@ -90,6 +86,7 @@ export declare function proxyScopeStorageProbe(req: Request, res: Response): Pro
 export declare function proxyLocalHealth(_req: Request, res: Response): Promise<void>;
 export declare function proxyOwner(req: Request, res: Response): Promise<void>;
 export declare function proxySouls(req: Request, res: Response): Promise<void>;
+export declare function proxySoulSettings(req: Request, res: Response): Promise<void>;
 export declare function registerMemorizeConversation(router: Router): void;
 export declare function registerGetTaskStatus(router: Router): void;
 export declare function proxyCancelMemorize(req: Request, res: Response): Promise<void>;

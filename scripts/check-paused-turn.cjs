@@ -58,7 +58,7 @@ vm.runInNewContext(ts.transpileModule(code, { compilerOptions: { module: ts.Modu
   response = { ok: true };
   for (const enabled of [false, true]) {
     await context.exports.proxyConversationRetrieve({ body: { userId: 'TestOwner', soulId: 'TestSoul', conversationId: 'test-chat', query: 'Draft', mentalHealthAddon: enabled } }, res);
-    assert.equal(wire.mental_health_addon, enabled, 'Per-Soul choice must override the shared default in both directions');
+    assert.equal(Object.hasOwn(wire, 'mental_health_addon'), false, 'Even an old ST request cannot override the canonical Soul setting');
   }
   await context.exports.proxyConversationRetrieve({ body: { userId: 'TestOwner', soulId: 'TestSoul', conversationId: 'test-chat', query: 'Draft' } }, res);
   assert.equal(Object.hasOwn(wire, 'mental_health_addon'), false, 'ST retrieval must inherit the server setting');

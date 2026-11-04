@@ -1726,9 +1726,6 @@ export async function proxyConversationRetrieve(req: Request, res: Response): Pr
     if (req.body?.soul_card) {
       payload.soul_card = req.body.soul_card;
     }
-    if (typeof req.body?.mentalHealthAddon === "boolean") {
-      payload.mental_health_addon = req.body.mentalHealthAddon;
-    }
     const resp = await httpJson(
       srv.baseUrl,
       `/conversation/${encodeURIComponent(conversationId)}/retrieve`,
@@ -2064,6 +2061,24 @@ export async function proxySouls(req: Request, res: Response): Promise<void> {
   }
 }
 
+export async function proxySoulSettings(req: Request, res: Response): Promise<void> {
+  try {
+    const cfg = readPluginConfig();
+    const srv = await ensureLocalServer(cfg);
+    const patch = req.method === 'PATCH';
+    const result = await httpJson(
+      srv.baseUrl,
+      `/souls/${encodeURIComponent(String(req.params.soulId))}/settings${patch && req.query?.initialize_only === 'true' ? '?initialize_only=true' : ''}`,
+      patch ? 'PATCH' : 'GET',
+      patch ? req.body : undefined,
+      60_000,
+    );
+    res.json(result);
+  } catch (e: any) {
+    res.status(Number.isInteger(e?.status) ? e.status : 503).json({ error: e?.message || String(e) });
+  }
+}
+
 // ---------------------
 // Route registrations
 // ---------------------
@@ -2131,6 +2146,8 @@ export function registerSouls(router: Router): void {
   router.get('/souls', proxySouls);
   router.get('/souls/:soulId', proxySouls);
   router.post('/souls', proxySouls);
+  router.get('/souls/:soulId/settings', proxySoulSettings);
+  router.patch('/souls/:soulId/settings', proxySoulSettings);
 }
 
 export async function proxyNarrativeSuggestion(req: Request, res: Response): Promise<void> {

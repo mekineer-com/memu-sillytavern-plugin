@@ -172,8 +172,9 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   assert(entrySource.includes('await stopServerWithSillyTavern();'));
   console.log('ST hooks: both launch modes respect Auto Start, instance ownership retained, server-side Iris refusal and shutdown failures remain visible.');
   const routes = [];
-  soulContext.exports.registerSouls({ get: route => routes.push(route), post: route => routes.push(route) });
-  assert(routes.includes('/souls/:soulId'));
+  soulContext.exports.registerSouls({ get: route => routes.push(['GET', route]), post: route => routes.push(['POST', route]), patch: route => routes.push(['PATCH', route]) });
+  assert(routes.some(([method, route]) => method === 'GET' && route === '/souls/:soulId'));
+  for (const method of ['GET', 'PATCH']) assert(routes.some(([verb, route]) => verb === method && route === '/souls/:soulId/settings'));
   let result;
   const res = { json: value => { result = value; }, status() { assert.fail('Unexpected proxy failure'); } };
   for (const user_name of [undefined, 'TestOwner']) {
@@ -187,6 +188,24 @@ vm.runInNewContext(ts.transpileModule(slice('export async function proxySouls(',
   assert.equal(result.route, '/souls/Test%20Soul?include_narrative=true');
   await soulContext.exports.proxySouls({ method: 'GET', params: { soulId: 'Test Soul' }, query: { include_narrative: 'false' } }, res);
   assert.equal(result.route, '/souls/Test%20Soul');
+  await soulContext.exports.proxySoulSettings({ method: 'GET', params: { soulId: 'Test Soul/one' }, query: { initialize_only: 'true' } }, res);
+  assert.equal(result.route, '/souls/Test%20Soul%2Fone/settings');
+  assert.equal(result.method, 'GET'); assert.equal(result.body, undefined);
+  for (const initialize_only of [undefined, 'false', 'true']) {
+    await soulContext.exports.proxySoulSettings({ method: 'PATCH', params: { soulId: 'Test Soul' }, query: { initialize_only }, body: { mental_health_addon: false } }, res);
+    assert.equal(result.route, `/souls/Test%20Soul/settings${initialize_only === 'true' ? '?initialize_only=true' : ''}`);
+    assert.equal(result.method, 'PATCH'); assert.equal(result.body.mental_health_addon, false);
+  }
+  const httpJson = soulContext.httpJson;
+  for (const status of [404, 422, undefined]) {
+    soulContext.httpJson = async () => { throw Object.assign(new Error('Settings rejected'), { status }); };
+    let failure, body;
+    await soulContext.exports.proxySoulSettings({ method: 'PATCH', params: { soulId: 'TestSoul' }, body: { mental_health_addon: true } }, {
+      status(value) { failure = value; return this; }, json(value) { body = value; },
+    });
+    assert.equal(failure, status ?? 503); assert.equal(body.error, 'Settings rejected');
+  }
+  soulContext.httpJson = httpJson;
   console.log('Soul creation leaves owner binding to MCP; live narrative GET is explicitly opt-in.');
 
   context.readPluginConfig = () => cfg;

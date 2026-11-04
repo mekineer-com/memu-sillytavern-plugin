@@ -23752,6 +23752,7 @@ exports.proxyScopeStorageProbe = proxyScopeStorageProbe;
 exports.proxyLocalHealth = proxyLocalHealth;
 exports.proxyOwner = proxyOwner;
 exports.proxySouls = proxySouls;
+exports.proxySoulSettings = proxySoulSettings;
 exports.registerMemorizeConversation = registerMemorizeConversation;
 exports.registerGetTaskStatus = registerGetTaskStatus;
 exports.proxyCancelMemorize = proxyCancelMemorize;
@@ -23831,7 +23832,6 @@ const DEFAULT_CONFIG = {
     //   baseUrl: http://127.0.0.1:8099  (or env MEMU_SERVER_URL)
     //   command: <serverPath>/run.py (spawned via python, no shell)
     serverPath: String(process.env.MEMU_SERVER_PATH || '').trim() || undefined,
-    embeddingBatchSize: 25,
     updatedAt: new Date().toISOString(),
 };
 // -----------------------------
@@ -23906,17 +23906,9 @@ function sanitizeIncomingConfig(obj) {
     // Transition cleanup expires 2027-01-17: remove this old-mapping upgrade handling.
     for (const key of ['useServerSettings', 'useClaudeCode', 'defaultProfileId', 'stepProfileId'])
         delete cfg[key];
-    // Normalize/derive embedding model fields (dropdown overrides manual).
-    const selected = typeof cfg.embeddingModelSelected === "string" ? String(cfg.embeddingModelSelected).trim() : "";
-    const manual = typeof cfg.embeddingModelManual === "string" ? String(cfg.embeddingModelManual).trim() : "";
-    cfg.embeddingModelSelected = selected || undefined;
-    cfg.embeddingModelManual = manual || undefined;
-    const embeddingBatchSize = Number(cfg.embeddingBatchSize);
-    cfg.embeddingBatchSize =
-        Number.isFinite(embeddingBatchSize) && embeddingBatchSize > 0 ? Math.floor(embeddingBatchSize) : 25;
     // External server settings (local mode): only serverPath is user-configurable.
     const serverPathRaw = String(cfg.serverPath || '').trim();
-    cfg.serverPath = serverPathRaw || DEFAULT_CONFIG.serverPath;
+    cfg.serverPath = DEFAULT_CONFIG.serverPath || serverPathRaw || undefined;
     cfg.autoStartWithSillyTavern = cfg.autoStartWithSillyTavern === true;
     cfg.updatedAt = new Date().toISOString();
     return cfg;
@@ -24197,6 +24189,8 @@ function loadSecrets(userDir) {
 }
 function _extractKeyValue(entry, wantedId, strictId = false) {
     if (!entry)
+        return null;
+    if (strictId && !Array.isArray(entry))
         return null;
     if (typeof entry === 'string' && entry.trim())
         return entry.trim();
@@ -24931,7 +24925,7 @@ function _readLogTail(logPath, maxLines) {
         return [];
     }
 }
-function spawnExternalServer(pythonExe, runPyPath, cfg) {
+function spawnExternalServer(pythonExe, runPyPath) {
     try {
         const child = (0, child_process_1.spawn)(pythonExe, [runPyPath], {
             cwd: path_1.default.dirname(runPyPath),
@@ -24986,32 +24980,31 @@ async function ensureLocalServer(cfg, opts = {}) {
     const baseUrl = getExternalServerBaseUrl(cfg);
     const shouldStartIfDown = opts.forceStart === true;
     let startedPid = null;
-    const healthNow = await _externalServerHealthInfo(baseUrl);
+    let healthNow = await _externalServerHealthInfo(baseUrl);
     if (healthNow.unavailable)
         throw new Error('memU Server status is unavailable.');
     if (!healthNow.healthy) {
-        if (shouldStartIfDown) {
-            // Only explicit Start or ST's optional startup hook may launch the server.
-            const runPy = getExternalServerRunPy(cfg);
-            if (runPy && fs_1.default.existsSync(runPy)) {
-                const now = Date.now();
-                if (now >= _externalSpawnCooldownUntilUnixMs) {
-                    _externalSpawnCooldownUntilUnixMs = now + 5000;
-                    const pythonExe = getExternalServerPython(cfg);
-                    startedPid = spawnExternalServer(pythonExe, runPy, cfg);
-                }
-            }
-            await waitForServerHealthy(baseUrl);
-        }
-        const healthAfter = await _externalServerHealthInfo(baseUrl);
-        if (healthAfter.unavailable)
-            throw new Error('memU Server status is unavailable.');
-        if (!healthAfter.healthy) {
-            if (shouldStartIfDown) {
-                throw new Error("mcp-memu-server did not become healthy");
-            }
+        if (!shouldStartIfDown)
             throw new Error("memU Server is stopped. Click Start.");
+        // Only explicit Start or ST's optional startup hook may launch the server.
+        const runPy = getExternalServerRunPy(cfg);
+        if (runPy && fs_1.default.existsSync(runPy)) {
+            const now = Date.now();
+            if (now >= _externalSpawnCooldownUntilUnixMs) {
+                _externalSpawnCooldownUntilUnixMs = now + 5000;
+                const pythonExe = getExternalServerPython(cfg);
+                startedPid = spawnExternalServer(pythonExe, runPy);
+            }
         }
+        await waitForServerHealthy(baseUrl);
+        healthNow = await _externalServerHealthInfo(baseUrl);
+        if (healthNow.unavailable)
+            throw new Error('memU Server status is unavailable.');
+        if (!healthNow.healthy)
+            throw new Error("mcp-memu-server did not become healthy");
+    }
+    if (shouldStartIfDown && (healthNow.shutdown?.draining || healthNow.shutdown?.stopping)) {
+        throw new Error('memU Server is stopping; start it again after it stops.');
     }
     let host = '127.0.0.1';
     let port = 0;
@@ -25024,7 +25017,7 @@ async function ensureLocalServer(cfg, opts = {}) {
         const msg = e?.message ? String(e.message) : String(e);
         throw new Error(`MEMU_SERVER_URL is not a valid URL: ${baseUrl} (${msg})`);
     }
-    return { baseUrl, host, port, ...(startedPid ? { startedPid } : {}) };
+    return { baseUrl, host, port, serverInstanceId: healthNow.serverInstanceId, ...(startedPid ? { startedPid } : {}) };
 }
 async function _externalServerHealthInfo(baseUrl) {
     try {
@@ -25131,7 +25124,7 @@ async function externalServerStart() {
         return { ok: false, message: msg, status: await externalServerStatus() };
     }
 }
-async function externalServerStop(config, confirmUnknown = false) {
+async function externalServerStop(config) {
     try {
         const cfg = config || readPluginConfig();
         const baseUrl = getExternalServerBaseUrl(cfg);
@@ -25141,19 +25134,6 @@ async function externalServerStop(config, confirmUnknown = false) {
         }
         if (!healthBefore.healthy) {
             return { ok: true, message: 'Server process not running.', status: await externalServerStatus() };
-        }
-        let busy;
-        try {
-            busy = (await httpJson(baseUrl, '/integration/mentra/status', 'GET', undefined, 2000))?.busy;
-        }
-        catch { /* Unknown activity requires explicit confirmation below. */ }
-        if (busy === true) {
-            return { ok: false, message: 'Stop the Iris conversation on the phone first.', status: await externalServerStatus() };
-        }
-        if (busy !== false && !confirmUnknown) {
-            return { ok: false, confirmationRequired: true,
-                message: 'Iris activity cannot be checked. Stopping may interrupt a conversation or lose pending work. Stop anyway?',
-                status: await externalServerStatus() };
         }
         await httpJson(baseUrl, '/admin/shutdown', 'POST', {
             requested_by: 'sillytavern-memu-plugin',
@@ -25199,9 +25179,8 @@ async function startServerWithSillyTavern() {
         const started = await ensureLocalServer(cfg, { forceStart: true });
         if (!started.startedPid)
             return;
-        const health = await _externalServerHealthInfo(started.baseUrl);
-        if (health.serverInstanceId) {
-            _stStartedServer = { cfg, instanceId: health.serverInstanceId };
+        if (started.serverInstanceId) {
+            _stStartedServer = { cfg, instanceId: started.serverInstanceId };
         }
     }
     catch (error) {
@@ -25234,7 +25213,7 @@ function registerServerControl(router) {
         return res.json(await externalServerStart());
     });
     router.post('/server/stop', async (req, res) => {
-        return res.json(await externalServerStop(undefined, req.body?.confirm_unknown === true));
+        return res.json(await externalServerStop());
     });
 }
 async function httpJson(baseUrl, urlPath, method, body, timeoutMs = 600000) {
@@ -25445,9 +25424,6 @@ async function proxyConversationRetrieve(req, res) {
         }
         if (req.body?.soul_card) {
             payload.soul_card = req.body.soul_card;
-        }
-        if (typeof req.body?.mentalHealthAddon === "boolean") {
-            payload.mental_health_addon = req.body.mentalHealthAddon;
         }
         const resp = await httpJson(srv.baseUrl, `/conversation/${encodeURIComponent(conversationId)}/retrieve`, "POST", payload);
         res.json(resp);
@@ -25740,8 +25716,20 @@ async function proxySouls(req, res) {
         const result = await httpJson(srv.baseUrl, req.params.soulId
             ? `/souls/${encodeURIComponent(String(req.params.soulId))}${req.query?.include_narrative === 'true' ? '?include_narrative=true' : ''}`
             : '/souls', req.method === 'POST' ? 'POST' : 'GET', req.method === 'POST'
-            ? { soul_id: String(req.body?.soul_id || ''), use_existing: Boolean(req.body?.use_existing), ...(req.body?.user_name !== undefined ? { user_name: req.body.user_name } : {}) }
+            ? { soul_id: String(req.body?.soul_id || ''), use_existing: Boolean(req.body?.use_existing) }
             : undefined);
+        res.json(result);
+    }
+    catch (e) {
+        res.status(Number.isInteger(e?.status) ? e.status : 503).json({ error: e?.message || String(e) });
+    }
+}
+async function proxySoulSettings(req, res) {
+    try {
+        const cfg = readPluginConfig();
+        const srv = await ensureLocalServer(cfg);
+        const patch = req.method === 'PATCH';
+        const result = await httpJson(srv.baseUrl, `/souls/${encodeURIComponent(String(req.params.soulId))}/settings${patch && req.query?.initialize_only === 'true' ? '?initialize_only=true' : ''}`, patch ? 'PATCH' : 'GET', patch ? req.body : undefined, 60000);
         res.json(result);
     }
     catch (e) {
@@ -25802,6 +25790,8 @@ function registerSouls(router) {
     router.get('/souls', proxySouls);
     router.get('/souls/:soulId', proxySouls);
     router.post('/souls', proxySouls);
+    router.get('/souls/:soulId/settings', proxySoulSettings);
+    router.patch('/souls/:soulId/settings', proxySoulSettings);
 }
 async function proxyNarrativeSuggestion(req, res) {
     const userId = String(req.body?.userId || "");
